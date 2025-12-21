@@ -745,10 +745,10 @@ def tela_admin():
         else:
             for missa in missas:
                 try:
-                fuso = pytz.timezone('America/Sao_Paulo')
-                agora = datetime.now(fuso)
-                dt_str = f"{missa['data']} {missa['hora']}"
-                dt_missa = fuso.localize(datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
+                    fuso = pytz.timezone('America/Sao_Paulo')
+                    agora = datetime.now(fuso)
+                    dt_str = f"{missa['data']} {missa['hora']}"
+                    dt_missa = fuso.localize(datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
                 
                 # Se passou 6h, pula essa missa (não exibe)
                 if agora > (dt_missa + timedelta(hours=6)): continue
@@ -883,3 +883,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
