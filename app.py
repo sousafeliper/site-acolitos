@@ -3,8 +3,8 @@ import psycopg2
 from datetime import datetime, date, time
 from typing import List, Dict, Optional
 
-# Configuração da págna
-st.set_page_coinfig(
+# Configuração da página
+st.set_page_config(
     page_title="Escala de Acólitos",
     page_icon="⛪️",
     layout="wide"
@@ -16,13 +16,15 @@ SENHA_ADMIN = "admin123"
 # ==================== FUNÇÃO DE CONEXÃO ====================
 
 def get_db_connection():
-    """Obtém uma nova conexão com o banco de dados PostgreSQL"""
+    """
+    Cria e retorna uma nova conexão com o banco de dados PostgreSQL.
+    NÃO usa cache - cria uma nova conexão a cada chamada para garantir estabilidade.
+    """
     try:
         # Tenta pegar a URL do banco dos secrets do Streamlit
         database_url = st.secrets.get("DATABASE_URL")
         if database_url:
             conn = psycopg2.connect(database_url)
-            # Configurar autocommit para evitar problemas com transações
             conn.autocommit = False
             return conn
         else:
@@ -604,4 +606,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
