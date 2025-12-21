@@ -383,6 +383,35 @@ def excluir_missa(missa_id: int) -> bool:
         if conn:
             conn.close()
 
+def remover_inscricao_admin(missa_id: int, nome_acolito: str) -> bool:
+    """Remove a inscrição de um acólito específico (função para admin)"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            DELETE FROM inscricoes
+            WHERE missa_id = %s AND nome_acolito = %s
+        """, (missa_id, nome_acolito))
+        
+        sucesso = cursor.rowcount > 0
+        conn.commit()
+        return sucesso
+    except psycopg2.Error as e:
+        st.error(f"Erro ao remover inscrição: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 # ==================== FUNÇÕES DE INTERFACE ====================
 
 def tela_login():
@@ -571,9 +600,19 @@ def tela_admin():
                 with col2:
                     inscritos = listar_inscritos(missa['id'])
                     if inscritos:
-                        st.markdown("**Acólitos Inscritos:**")
-                        for acolito in inscritos:
-                            st.markdown(f"- {acolito}")
+                        with st.expander("👥 Gerenciar Inscritos", expanded=False):
+                            for acolito in inscritos:
+                                col_nome, col_btn = st.columns([3, 1])
+                                with col_nome:
+                                    st.markdown(f"• {acolito}")
+                                with col_btn:
+                                    if st.button("🗑️", key=f"remove_{missa['id']}_{acolito}", 
+                                               help=f"Remover {acolito}"):
+                                        if remover_inscricao_admin(missa['id'], acolito):
+                                            st.success(f"{acolito} removido da escala!")
+                                            st.rerun()
+                                        else:
+                                            st.error(f"Erro ao remover {acolito}.")
                     else:
                         st.markdown("**Nenhum acólito inscrito ainda.**")
                 
