@@ -752,7 +752,7 @@ def tela_admin():
                 
                     # Se passou 6h, pula essa missa (não exibe)
                     if agora > (dt_missa + timedelta(hours=6)): continue
-            except: pass
+                except: pass
                 with st.expander(f"📿 {missa['descricao'] or 'Missa'} - {missa['data']} {missa['hora']}", expanded=True):
                     col1, col2, col3 = st.columns([2, 1, 1])
                     
@@ -883,5 +883,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
