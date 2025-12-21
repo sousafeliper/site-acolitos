@@ -1,6 +1,7 @@
 import streamlit as st
 import psycopg2
-from datetime import datetime, date, time
+import pytz 
+from datetime import datetime, date, time, timedelta 
 from typing import List, Dict, Optional
 
 # Configuração da página
@@ -284,6 +285,37 @@ def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int) -> 
             cursor.close()
         if conn:
             conn.close()
+
+def obter_ranking():
+    conn = get_db_connection()
+    if not conn: return []
+    cur = conn.cursor()
+    
+    # Pega quem serviu e quando
+    cur.execute("""
+        SELECT i.nome_acolito, m.data, m.hora 
+        FROM inscricoes i JOIN missas m ON i.missa_id = m.id
+    """)
+    dados = cur.fetchall()
+    conn.close()
+
+    pontuacao = {}
+    fuso = pytz.timezone('America/Sao_Paulo')
+    agora = datetime.now(fuso)
+
+    for nome, data_str, hora_str in dados:
+        try:
+            # Monta data da missa
+            dt_str = f"{data_str} {hora_str}"
+            dt_missa = fuso.localize(datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
+            
+            # Se já passou 6 horas da missa, ganha ponto
+            if agora > (dt_missa + timedelta(hours=6)):
+                pontuacao[nome] = pontuacao.get(nome, 0) + 1
+        except: continue
+
+    # Ordena do maior para o menor
+    return sorted(pontuacao.items(), key=lambda x: x[1], reverse=True)
 
 def listar_todas_missas() -> List[Dict]:
     """Retorna todas as missas (para admin)"""
@@ -590,6 +622,15 @@ def tela_escala():
         st.info("📭 Não há missas cadastradas no momento.")
     else:
         for missa in missas:
+            try:
+                fuso = pytz.timezone('America/Sao_Paulo')
+                agora = datetime.now(fuso)
+                dt_str = f"{missa['data']} {missa['hora']}"
+                dt_missa = fuso.localize(datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
+                
+                # Se passou 6h, pula essa missa (não exibe)
+                if agora > (dt_missa + timedelta(hours=6)): continue
+            except: pass
             with st.container():
                 # Formatar data para exibição
                 try:
@@ -647,6 +688,15 @@ def tela_escala():
                 
                 st.markdown("---")
 
+    st.subheader("🏆 Ranking de Acólitos")
+    ranking = obter_ranking()
+    if ranking:
+        for i, (nome, pontos) in enumerate(ranking, 1):
+            medalha = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else f"{i}º"
+            st.write(f"**{medalha} {nome}:** {pontos} missas servidas")
+    else:
+        st.info("Nenhum ponto contabilizado ainda.")
+
 def tela_admin():
     """Renderiza a tela de administração"""
     st.title("⚙️ Painel do Coordenador")
@@ -659,7 +709,7 @@ def tela_admin():
         st.rerun()
     
     # Tabs para organizar as seções
-    tab1, tab2 = st.tabs(["📋 Missas", "👥 Gerenciar Equipe"])
+    tab1, tab2, tab3 = st.tabs(["📋 Missas", "👥 Gerenciar Equipe", "🏆 Ranking"])
     
     # TAB 1: Missas
     with tab1:
@@ -694,6 +744,15 @@ def tela_admin():
             st.info("📭 Nenhuma missa cadastrada ainda.")
         else:
             for missa in missas:
+                try:
+                fuso = pytz.timezone('America/Sao_Paulo')
+                agora = datetime.now(fuso)
+                dt_str = f"{missa['data']} {missa['hora']}"
+                dt_missa = fuso.localize(datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
+                
+                # Se passou 6h, pula essa missa (não exibe)
+                if agora > (dt_missa + timedelta(hours=6)): continue
+            except: pass
                 with st.expander(f"📿 {missa['descricao'] or 'Missa'} - {missa['data']} {missa['hora']}", expanded=True):
                     col1, col2, col3 = st.columns([2, 1, 1])
                     
@@ -785,6 +844,15 @@ def tela_admin():
                         else:
                             st.error(f"Erro ao remover acólito '{acolito}'.")
 
+    # TAB 3: Ranking
+    with tab3:
+        st.header("🏆 Ranking Geral")
+        ranking = obter_ranking()
+        if ranking:
+            st.table([{"Posição": f"{i}º", "Nome": n, "Missas": p} for i, (n, p) in enumerate(ranking, 1)])
+        else:
+            st.info("Sem dados.")
+
 # ==================== LÓGICA PRINCIPAL ====================
 
 def main():
@@ -815,4 +883,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
