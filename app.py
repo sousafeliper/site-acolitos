@@ -10,8 +10,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Constantes
-SENHA_ADMIN = "goias"
 
 # ==================== FUNÇÃO DE CONEXÃO ====================
 
@@ -563,7 +561,7 @@ def tela_login():
             senha = st.text_input("Digite a senha", type="password", key="input_senha")
             
             if st.button("Acessar como Coordenador", type="secondary", use_container_width=True):
-                if senha == SENHA_ADMIN:
+                if senha == st.secrets["ADMIN_SENHA"]:
                     st.session_state['tela'] = 'admin'
                     st.rerun()
                 else:
@@ -790,6 +788,16 @@ def tela_admin():
 # ==================== LÓGICA PRINCIPAL ====================
 
 def main():
+    # --- INÍCIO DO BLOCO DE CSS (Para esconder menu e rodapé) ---
+    st.markdown("""
+        <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            .stDeployButton {display:none;}
+        </style>
+    """, unsafe_allow_html=True)
+    # --- FIM DO BLOCO DE CSS ---
     # Inicializar banco de dados
     criar_tabelas()
     
@@ -807,3 +815,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
