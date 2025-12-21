@@ -3,8 +3,8 @@ import psycopg2
 from datetime import datetime, date, time
 from typing import List, Dict, Optional
 
-# Configuração da página
-st.set_page_config(
+# Configuração da págna
+st.set_page_coinfig(
     page_title="Escala de Acólitos",
     page_icon="⛪️",
     layout="wide"
@@ -15,9 +15,8 @@ SENHA_ADMIN = "admin123"
 
 # ==================== FUNÇÃO DE CONEXÃO ====================
 
-@st.cache_resource
 def get_db_connection():
-    """Obtém conexão com o banco de dados PostgreSQL (cacheada para reutilização)"""
+    """Obtém uma nova conexão com o banco de dados PostgreSQL"""
     try:
         # Tenta pegar a URL do banco dos secrets do Streamlit
         database_url = st.secrets.get("DATABASE_URL")
@@ -36,22 +35,6 @@ def get_db_connection():
         st.info("💡 Verifique se a variável `DATABASE_URL` está configurada corretamente nos secrets do Streamlit.")
         return None
 
-def _verificar_e_reconectar(conn):
-    """Verifica se a conexão está ativa e reconecta se necessário"""
-    if conn is None:
-        return get_db_connection()
-    
-    try:
-        # Tenta executar uma query simples para verificar se a conexão está ativa
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1")
-        cursor.close()
-        return conn
-    except (psycopg2.OperationalError, psycopg2.InterfaceError):
-        # Conexão caiu, limpar cache e reconectar
-        get_db_connection.clear()
-        return get_db_connection()
-
 # ==================== FUNÇÕES DE BANCO DE DADOS ====================
 
 def criar_tabelas():
@@ -60,6 +43,7 @@ def criar_tabelas():
     if not conn:
         return
     
+    cursor = None
     try:
         cursor = conn.cursor()
         
@@ -86,11 +70,15 @@ def criar_tabelas():
         """)
         
         conn.commit()
-        cursor.close()
     except psycopg2.Error as e:
         st.error(f"Erro ao criar tabelas: {e}")
         if conn:
             conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def listar_missas_futuras() -> List[Dict]:
     """Retorna lista de missas futuras ordenadas por data"""
@@ -98,6 +86,7 @@ def listar_missas_futuras() -> List[Dict]:
     if not conn:
         return []
     
+    cursor = None
     try:
         cursor = conn.cursor()
         
@@ -115,7 +104,6 @@ def listar_missas_futuras() -> List[Dict]:
         """, (hoje,))
         
         resultados = cursor.fetchall()
-        cursor.close()
         
         missas = []
         for row in resultados:
@@ -138,6 +126,11 @@ def listar_missas_futuras() -> List[Dict]:
         if conn:
             conn.rollback()
         return []
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def verificar_inscricao(missa_id: int, nome_acolito: str) -> bool:
     """Verifica se o acólito já está inscrito na missa"""
@@ -145,6 +138,7 @@ def verificar_inscricao(missa_id: int, nome_acolito: str) -> bool:
     if not conn:
         return False
     
+    cursor = None
     try:
         cursor = conn.cursor()
         
@@ -154,13 +148,17 @@ def verificar_inscricao(missa_id: int, nome_acolito: str) -> bool:
         """, (missa_id, nome_acolito))
         
         resultado = cursor.fetchone()[0] > 0
-        cursor.close()
         return resultado
     except psycopg2.Error as e:
         st.error(f"Erro ao verificar inscrição: {e}")
         if conn:
             conn.rollback()
         return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
     """Inscreve um acólito em uma missa (com verificação de concorrência)"""
@@ -168,6 +166,7 @@ def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
     if not conn:
         return False
     
+    cursor = None
     try:
         cursor = conn.cursor()
         
@@ -182,13 +181,11 @@ def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
         
         resultado = cursor.fetchone()
         if not resultado:
-            cursor.close()
             return False
         
         vagas_totais, vagas_preenchidas = resultado
         
         if vagas_preenchidas >= vagas_totais:
-            cursor.close()
             return False
         
         # Verificar se já está inscrito (usando o mesmo cursor)
@@ -198,7 +195,6 @@ def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
         """, (missa_id, nome_acolito))
         
         if cursor.fetchone()[0] > 0:
-            cursor.close()
             return False
         
         # Inserir inscrição
@@ -208,7 +204,6 @@ def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
         """, (missa_id, nome_acolito))
         
         conn.commit()
-        cursor.close()
         return True
     except psycopg2.IntegrityError:
         # Já está inscrito (constraint UNIQUE)
@@ -220,6 +215,11 @@ def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
         if conn:
             conn.rollback()
         return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def desinscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
     """Remove a inscrição de um acólito"""
@@ -227,6 +227,7 @@ def desinscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
     if not conn:
         return False
     
+    cursor = None
     try:
         cursor = conn.cursor()
         
@@ -237,13 +238,17 @@ def desinscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
         
         sucesso = cursor.rowcount > 0
         conn.commit()
-        cursor.close()
         return sucesso
     except psycopg2.Error as e:
         st.error(f"Erro ao desinscrever acólito: {e}")
         if conn:
             conn.rollback()
         return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int) -> bool:
     """Cadastra uma nova missa"""
@@ -251,6 +256,7 @@ def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int) -> 
     if not conn:
         return False
     
+    cursor = None
     try:
         cursor = conn.cursor()
         
@@ -260,13 +266,17 @@ def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int) -> 
         """, (data, hora, descricao, vagas_totais))
         
         conn.commit()
-        cursor.close()
         return True
     except psycopg2.Error as e:
         st.error(f"Erro ao cadastrar missa: {e}")
         if conn:
             conn.rollback()
         return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def listar_todas_missas() -> List[Dict]:
     """Retorna todas as missas (para admin)"""
@@ -274,6 +284,7 @@ def listar_todas_missas() -> List[Dict]:
     if not conn:
         return []
     
+    cursor = None
     try:
         cursor = conn.cursor()
         
@@ -287,7 +298,6 @@ def listar_todas_missas() -> List[Dict]:
         """)
         
         resultados = cursor.fetchall()
-        cursor.close()
         
         missas = []
         for row in resultados:
@@ -306,6 +316,11 @@ def listar_todas_missas() -> List[Dict]:
         if conn:
             conn.rollback()
         return []
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def listar_inscritos(missa_id: int) -> List[str]:
     """Retorna lista de nomes dos acólitos inscritos em uma missa"""
@@ -313,6 +328,7 @@ def listar_inscritos(missa_id: int) -> List[str]:
     if not conn:
         return []
     
+    cursor = None
     try:
         cursor = conn.cursor()
         
@@ -323,7 +339,6 @@ def listar_inscritos(missa_id: int) -> List[str]:
         """, (missa_id,))
         
         resultados = cursor.fetchall()
-        cursor.close()
         
         return [row[0] for row in resultados]
     except psycopg2.Error as e:
@@ -331,6 +346,11 @@ def listar_inscritos(missa_id: int) -> List[str]:
         if conn:
             conn.rollback()
         return []
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def excluir_missa(missa_id: int) -> bool:
     """Exclui uma missa e suas inscrições"""
@@ -338,6 +358,7 @@ def excluir_missa(missa_id: int) -> bool:
     if not conn:
         return False
     
+    cursor = None
     try:
         cursor = conn.cursor()
         
@@ -348,13 +369,17 @@ def excluir_missa(missa_id: int) -> bool:
         cursor.execute("DELETE FROM missas WHERE id = %s", (missa_id,))
         
         conn.commit()
-        cursor.close()
         return True
     except psycopg2.Error as e:
         st.error(f"Erro ao excluir missa: {e}")
         if conn:
             conn.rollback()
         return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # ==================== FUNÇÕES DE INTERFACE ====================
 
