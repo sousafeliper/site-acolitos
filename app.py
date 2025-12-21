@@ -15,13 +15,17 @@ SENHA_ADMIN = "admin123"
 
 # ==================== FUNÇÃO DE CONEXÃO ====================
 
-def get_connection():
-    """Obtém conexão com o banco de dados PostgreSQL"""
+@st.cache_resource
+def get_db_connection():
+    """Obtém conexão com o banco de dados PostgreSQL (cacheada para reutilização)"""
     try:
         # Tenta pegar a URL do banco dos secrets do Streamlit
         database_url = st.secrets.get("DATABASE_URL")
         if database_url:
-            return psycopg2.connect(database_url)
+            conn = psycopg2.connect(database_url)
+            # Configurar autocommit para evitar problemas com transações
+            conn.autocommit = False
+            return conn
         else:
             # Se não encontrar nos secrets, exibe aviso
             st.warning("⚠️ **Configuração de banco de dados não encontrada.**")
@@ -32,11 +36,27 @@ def get_connection():
         st.info("💡 Verifique se a variável `DATABASE_URL` está configurada corretamente nos secrets do Streamlit.")
         return None
 
+def _verificar_e_reconectar(conn):
+    """Verifica se a conexão está ativa e reconecta se necessário"""
+    if conn is None:
+        return get_db_connection()
+    
+    try:
+        # Tenta executar uma query simples para verificar se a conexão está ativa
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.close()
+        return conn
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        # Conexão caiu, limpar cache e reconectar
+        get_db_connection.clear()
+        return get_db_connection()
+
 # ==================== FUNÇÕES DE BANCO DE DADOS ====================
 
 def criar_tabelas():
     """Cria as tabelas do banco de dados se não existirem"""
-    conn = get_connection()
+    conn = get_db_connection()
     if not conn:
         return
     
@@ -67,16 +87,14 @@ def criar_tabelas():
         
         conn.commit()
         cursor.close()
-        conn.close()
     except psycopg2.Error as e:
         st.error(f"Erro ao criar tabelas: {e}")
         if conn:
             conn.rollback()
-            conn.close()
 
 def listar_missas_futuras() -> List[Dict]:
     """Retorna lista de missas futuras ordenadas por data"""
-    conn = get_connection()
+    conn = get_db_connection()
     if not conn:
         return []
     
@@ -98,7 +116,6 @@ def listar_missas_futuras() -> List[Dict]:
         
         resultados = cursor.fetchall()
         cursor.close()
-        conn.close()
         
         missas = []
         for row in resultados:
@@ -120,12 +137,11 @@ def listar_missas_futuras() -> List[Dict]:
         st.error(f"Erro ao listar missas: {e}")
         if conn:
             conn.rollback()
-            conn.close()
         return []
 
 def verificar_inscricao(missa_id: int, nome_acolito: str) -> bool:
     """Verifica se o acólito já está inscrito na missa"""
-    conn = get_connection()
+    conn = get_db_connection()
     if not conn:
         return False
     
@@ -139,18 +155,16 @@ def verificar_inscricao(missa_id: int, nome_acolito: str) -> bool:
         
         resultado = cursor.fetchone()[0] > 0
         cursor.close()
-        conn.close()
         return resultado
     except psycopg2.Error as e:
         st.error(f"Erro ao verificar inscrição: {e}")
         if conn:
             conn.rollback()
-            conn.close()
         return False
 
 def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
     """Inscreve um acólito em uma missa (com verificação de concorrência)"""
-    conn = get_connection()
+    conn = get_db_connection()
     if not conn:
         return False
     
@@ -169,20 +183,22 @@ def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
         resultado = cursor.fetchone()
         if not resultado:
             cursor.close()
-            conn.close()
             return False
         
         vagas_totais, vagas_preenchidas = resultado
         
         if vagas_preenchidas >= vagas_totais:
             cursor.close()
-            conn.close()
             return False
         
-        # Verificar se já está inscrito
-        if verificar_inscricao(missa_id, nome_acolito):
+        # Verificar se já está inscrito (usando o mesmo cursor)
+        cursor.execute("""
+            SELECT COUNT(*) FROM inscricoes
+            WHERE missa_id = %s AND nome_acolito = %s
+        """, (missa_id, nome_acolito))
+        
+        if cursor.fetchone()[0] > 0:
             cursor.close()
-            conn.close()
             return False
         
         # Inserir inscrição
@@ -193,24 +209,21 @@ def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
         
         conn.commit()
         cursor.close()
-        conn.close()
         return True
     except psycopg2.IntegrityError:
         # Já está inscrito (constraint UNIQUE)
         if conn:
             conn.rollback()
-            conn.close()
         return False
     except psycopg2.Error as e:
         st.error(f"Erro ao inscrever acólito: {e}")
         if conn:
             conn.rollback()
-            conn.close()
         return False
 
 def desinscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
     """Remove a inscrição de um acólito"""
-    conn = get_connection()
+    conn = get_db_connection()
     if not conn:
         return False
     
@@ -225,18 +238,16 @@ def desinscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
         sucesso = cursor.rowcount > 0
         conn.commit()
         cursor.close()
-        conn.close()
         return sucesso
     except psycopg2.Error as e:
         st.error(f"Erro ao desinscrever acólito: {e}")
         if conn:
             conn.rollback()
-            conn.close()
         return False
 
 def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int) -> bool:
     """Cadastra uma nova missa"""
-    conn = get_connection()
+    conn = get_db_connection()
     if not conn:
         return False
     
@@ -250,18 +261,16 @@ def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int) -> 
         
         conn.commit()
         cursor.close()
-        conn.close()
         return True
     except psycopg2.Error as e:
         st.error(f"Erro ao cadastrar missa: {e}")
         if conn:
             conn.rollback()
-            conn.close()
         return False
 
 def listar_todas_missas() -> List[Dict]:
     """Retorna todas as missas (para admin)"""
-    conn = get_connection()
+    conn = get_db_connection()
     if not conn:
         return []
     
@@ -279,7 +288,6 @@ def listar_todas_missas() -> List[Dict]:
         
         resultados = cursor.fetchall()
         cursor.close()
-        conn.close()
         
         missas = []
         for row in resultados:
@@ -297,12 +305,11 @@ def listar_todas_missas() -> List[Dict]:
         st.error(f"Erro ao listar missas: {e}")
         if conn:
             conn.rollback()
-            conn.close()
         return []
 
 def listar_inscritos(missa_id: int) -> List[str]:
     """Retorna lista de nomes dos acólitos inscritos em uma missa"""
-    conn = get_connection()
+    conn = get_db_connection()
     if not conn:
         return []
     
@@ -317,19 +324,17 @@ def listar_inscritos(missa_id: int) -> List[str]:
         
         resultados = cursor.fetchall()
         cursor.close()
-        conn.close()
         
         return [row[0] for row in resultados]
     except psycopg2.Error as e:
         st.error(f"Erro ao listar inscritos: {e}")
         if conn:
             conn.rollback()
-            conn.close()
         return []
 
 def excluir_missa(missa_id: int) -> bool:
     """Exclui uma missa e suas inscrições"""
-    conn = get_connection()
+    conn = get_db_connection()
     if not conn:
         return False
     
@@ -344,13 +349,11 @@ def excluir_missa(missa_id: int) -> bool:
         
         conn.commit()
         cursor.close()
-        conn.close()
         return True
     except psycopg2.Error as e:
         st.error(f"Erro ao excluir missa: {e}")
         if conn:
             conn.rollback()
-            conn.close()
         return False
 
 # ==================== FUNÇÕES DE INTERFACE ====================
