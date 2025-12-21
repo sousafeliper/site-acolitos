@@ -750,8 +750,8 @@ def tela_admin():
                     dt_str = f"{missa['data']} {missa['hora']}"
                     dt_missa = fuso.localize(datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
                 
-                # Se passou 6h, pula essa missa (não exibe)
-                if agora > (dt_missa + timedelta(hours=6)): continue
+                    # Se passou 6h, pula essa missa (não exibe)
+                    if agora > (dt_missa + timedelta(hours=6)): continue
             except: pass
                 with st.expander(f"📿 {missa['descricao'] or 'Missa'} - {missa['data']} {missa['hora']}", expanded=True):
                     col1, col2, col3 = st.columns([2, 1, 1])
@@ -883,4 +883,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
