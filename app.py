@@ -837,19 +837,28 @@ def tela_admin():
         if not encontrou_antiga:
             st.info("Nenhuma missa antiga registrada ainda.")
 
+
 # ==================== LÓGICA PRINCIPAL ====================
 
 def main():
-    # --- INÍCIO DO BLOCO DE CSS (Para esconder menu e rodapé) ---
+    # --- INÍCIO DO CSS (Corrigido para não sumir com o botão da sidebar) ---
     st.markdown("""
         <style>
+            /* Esconde o menu de 3 pontinhos (Hamburger) */
             #MainMenu {visibility: hidden;}
+            
+            /* Esconde o rodapé "Made with Streamlit" */
             footer {visibility: hidden;}
-            header {visibility: hidden;}
+            
+            /* Esconde o botão de Deploy colorido se ele aparecer */
             .stDeployButton {display:none;}
+            
+            /* ATENÇÃO: Não escondemos mais o 'header' completo, 
+               pois é lá que fica a setinha para abrir a sidebar no celular */
         </style>
     """, unsafe_allow_html=True)
     # --- FIM DO BLOCO DE CSS ---
+
     # Inicializar banco de dados
     criar_tabelas()
     
