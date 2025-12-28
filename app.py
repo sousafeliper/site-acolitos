@@ -700,158 +700,142 @@ def tela_escala():
 def tela_admin():
     """Renderiza a tela de administração"""
     st.title("⚙️ Painel do Coordenador")
-    st.markdown("---")
-    
-    # Botão para voltar
-    if st.button("← Voltar ao Login"):
-        if 'tela' in st.session_state:
-            del st.session_state['tela']
+    if st.button("← Sair"):
+        if 'tela' in st.session_state: del st.session_state['tela']
         st.rerun()
     
-    # Tabs para organizar as seções
-    tab1, tab2, tab3 = st.tabs(["📋 Missas", "👥 Gerenciar Equipe", "🏆 Ranking"])
+    # AGORA SÃO 4 ABAS
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Missas Futuras", "👥 Equipe", "🏆 Ranking", "📜 Histórico/Correção"])
     
-    # TAB 1: Missas
+    # --- ABA 1: MISSAS FUTURAS ---
     with tab1:
-        # Sidebar com formulário de nova missa
         with st.sidebar:
             st.header("➕ Nova Missa")
-            
             with st.form("form_nova_missa"):
-                data = st.date_input("Data", value=date.today(), min_value=date.today())
+                data = st.date_input("Data", min_value=date.today())
                 hora = st.time_input("Hora", value=time(19, 0))
                 descricao = st.text_input("Descrição", placeholder="Ex: Missa Solene")
-                vagas_totais = st.number_input("Vagas Totais", min_value=1, value=4, step=1)
-                
-                submitted = st.form_submit_button("Cadastrar Missa", type="primary", use_container_width=True)
-                
-                if submitted:
-                    data_str = data.strftime("%Y-%m-%d")
-                    hora_str = hora.strftime("%H:%M")
-                    
-                    if cadastrar_missa(data_str, hora_str, descricao, vagas_totais):
-                        st.success(f"Missa das {hora_str} cadastrada com sucesso!")
+                vagas_totais = st.number_input("Vagas", 1, 20, 4)
+                if st.form_submit_button("Cadastrar Missa", type="primary"):
+                    if cadastrar_missa(data.strftime("%Y-%m-%d"), hora.strftime("%H:%M"), descricao, vagas_totais):
+                        st.success("Sucesso!")
                         st.rerun()
-                    else:
-                        st.error("Erro ao cadastrar missa.")
         
-        # Lista de missas na tela principal
-        st.header("📋 Missas Cadastradas")
+        st.subheader("Gerenciar Missas Futuras")
+        missas = listar_todas_missas()
+        if not missas: st.info("Nenhuma missa.")
+        
+        for missa in missas:
+            # FILTRO: Só mostra missas que AINDA VÃO ACONTECER (ou recentes)
+            try:
+                fuso = pytz.timezone('America/Sao_Paulo')
+                agora = datetime.now(fuso)
+                dt_missa = fuso.localize(datetime.strptime(f"{missa['data']} {missa['hora']}", "%Y-%m-%d %H:%M"))
+                if agora > (dt_missa + timedelta(hours=6)): continue # Esconde as velhas
+            except: pass
+
+            with st.expander(f"📿 {missa['data']} - {missa['descricao'] or 'Missa'} ({missa['hora']})", expanded=True):
+                c1, c2, c3 = st.columns([2, 2, 1])
+                c1.write(f"**Vagas:** {missa['vagas_preenchidas']}/{missa['vagas_totais']}")
+                with c2:
+                    inscritos = listar_inscritos(missa['id'])
+                    if inscritos:
+                        for u in inscritos:
+                            cx, cy = st.columns([3, 1])
+                            cx.text(u)
+                            if cy.button("🗑️", key=f"rm_{missa['id']}_{u}"):
+                                remover_inscricao_admin(missa['id'], u)
+                                st.rerun()
+                    else: st.caption("Vazio")
+                with c3:
+                    if st.button("Excluir", key=f"del_{missa['id']}"):
+                        excluir_missa(missa['id'])
+                        st.rerun()
+
+    # --- ABA 2: EQUIPE ---
+    with tab2:
+        st.header("Gerenciar Equipe")
+        with st.form("add_ac"):
+            nome = st.text_input("Nome")
+            if st.form_submit_button("Cadastrar"):
+                if cadastrar_acolito(nome): st.success("Ok!"); st.rerun()
+        st.markdown("---")
+        for ac in listar_acolitos():
+            c1, c2 = st.columns([4,1])
+            c1.write(ac)
+            if c2.button("🗑️", key=f"del_ac_{ac}"):
+                remover_acolito(ac)
+                st.rerun()
+
+    # --- ABA 3: RANKING ---
+    with tab3:
+        st.subheader("Ranking Geral")
+        r = obter_ranking()
+        if r: st.table([{"Pos": f"{i}º", "Nome": n, "Missas": p} for i, (n,p) in enumerate(r,1)])
+        else: st.info("Sem dados.")
+
+    # --- ABA 4: HISTÓRICO E CORREÇÃO (NOVA) ---
+    with tab4:
+        st.header("📜 Histórico e Correção de Pontos")
+        st.info("Aqui aparecem as missas que JÁ PASSARAM (+6h). Adicione ou remova acólitos aqui para corrigir o Ranking.")
         
         missas = listar_todas_missas()
+        lista_completa_acolitos = listar_acolitos()
         
-        if not missas:
-            st.info("📭 Nenhuma missa cadastrada ainda.")
-        else:
-            for missa in missas:
-                try:
-                    fuso = pytz.timezone('America/Sao_Paulo')
-                    agora = datetime.now(fuso)
-                    dt_str = f"{missa['data']} {missa['hora']}"
-                    dt_missa = fuso.localize(datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
-                
-                    # Se passou 6h, pula essa missa (não exibe)
-                    if agora > (dt_missa + timedelta(hours=6)): continue
-                except: pass
-                with st.expander(f"📿 {missa['descricao'] or 'Missa'} - {missa['data']} {missa['hora']}", expanded=True):
-                    col1, col2, col3 = st.columns([2, 1, 1])
+        encontrou_antiga = False
+        
+        for missa in missas:
+            # LÓGICA INVERSA: Só mostra as missas VELHAS
+            mostrar = False
+            try:
+                fuso = pytz.timezone('America/Sao_Paulo')
+                agora = datetime.now(fuso)
+                dt_missa = fuso.localize(datetime.strptime(f"{missa['data']} {missa['hora']}", "%Y-%m-%d %H:%M"))
+                if agora > (dt_missa + timedelta(hours=6)): 
+                    mostrar = True
+                    encontrou_antiga = True
+            except: pass
+            
+            if mostrar:
+                with st.expander(f"✅ REALIZADA: {missa['data']} - {missa['descricao']} ({missa['hora']})"):
+                    col_lista, col_add = st.columns([1, 1])
                     
-                    with col1:
-                        try:
-                            data_obj = datetime.strptime(missa['data'], "%Y-%m-%d")
-                            data_formatada = data_obj.strftime("%d/%m/%Y")
-                        except:
-                            data_formatada = missa['data']
-                        
-                        st.markdown(f"**Data:** {data_formatada}")
-                        st.markdown(f"**Hora:** {missa['hora']}")
-                        st.markdown(f"**Vagas:** {missa['vagas_preenchidas']}/{missa['vagas_totais']}")
-                    
-                    with col2:
+                    # Coluna da Esquerda: Quem estava lá (Para remover quem faltou)
+                    with col_lista:
+                        st.markdown("**Quem serviu (Pontuou):**")
                         inscritos = listar_inscritos(missa['id'])
                         if inscritos:
-                            with st.expander("👥 Gerenciar Inscritos", expanded=False):
-                                for acolito in inscritos:
-                                    col_nome, col_btn = st.columns([3, 1])
-                                    with col_nome:
-                                        st.markdown(f"• {acolito}")
-                                    with col_btn:
-                                        if st.button("🗑️", key=f"remove_{missa['id']}_{acolito}", 
-                                                   help=f"Remover {acolito}"):
-                                            if remover_inscricao_admin(missa['id'], acolito):
-                                                st.success(f"{acolito} removido da escala!")
-                                                st.rerun()
-                                            else:
-                                                st.error(f"Erro ao remover {acolito}.")
+                            for u in inscritos:
+                                c_nome, c_del = st.columns([3, 1])
+                                c_nome.text(f"• {u}")
+                                if c_del.button("Tirar Ponto", key=f"hist_rm_{missa['id']}_{u}", help="Remove do ranking"):
+                                    remover_inscricao_admin(missa['id'], u)
+                                    st.rerun()
                         else:
-                            st.markdown("**Nenhum acólito inscrito ainda.**")
+                            st.warning("Ninguém registrado.")
                     
-                    with col3:
-                        if st.button("🗑️ Excluir Missa", key=f"excluir_{missa['id']}", 
-                                   use_container_width=True, type="secondary"):
-                            if excluir_missa(missa['id']):
-                                st.success("Missa excluída com sucesso!")
-                                st.rerun()
+                    # Coluna da Direita: Adicionar quem substituiu
+                    with col_add:
+                        st.markdown("**Adicionar Acólito (Dar Ponto):**")
+                        # Selectbox para escolher quem adicionar
+                        quem_add = st.selectbox("Escolha o acólito:", [""] + lista_completa_acolitos, key=f"sel_add_{missa['id']}")
+                        
+                        if st.button("Adicionar Manualmente", key=f"btn_add_{missa['id']}"):
+                            if quem_add:
+                                # Usa a função de inscrever (ignora validação de data, mas valida duplicidade)
+                                # Se estiver lotado, removemos alguém antes ou forçamos. 
+                                # Como é SQL direto, inscrever_acolito respeita limite de vagas.
+                                # Se precisar forçar acima do limite, o coordenador deve aumentar a vaga da missa ou remover quem faltou primeiro.
+                                if inscrever_acolito(missa['id'], quem_add):
+                                    st.success(f"Ponto adicionado para {quem_add}!")
+                                    st.rerun()
+                                else:
+                                    st.error("Erro: Missa lotada ou já inscrito.")
                             else:
-                                st.error("Erro ao excluir missa.")
-    
-    # TAB 2: Gerenciar Equipe
-    with tab2:
-        st.header("👥 Gerenciar Equipe")
-        st.markdown("Cadastre e gerencie os acólitos que podem acessar o sistema.")
-        
-        # Formulário para cadastrar novo acólito
-        st.subheader("➕ Cadastrar Novo Acólito")
-        
-        with st.form("form_novo_acolito"):
-            nome_acolito = st.text_input("Nome do Acólito", placeholder="Digite o nome completo", key="input_nome_acolito")
-            
-            submitted = st.form_submit_button("Cadastrar Acólito", type="primary", use_container_width=True)
-            
-            if submitted:
-                if nome_acolito.strip():
-                    if cadastrar_acolito(nome_acolito):
-                        st.success(f"Acólito '{nome_acolito}' cadastrado com sucesso!")
-                        st.rerun()
-                    else:
-                        st.error(f"Erro ao cadastrar acólito. O nome '{nome_acolito}' pode já estar cadastrado.")
-                else:
-                    st.warning("Por favor, digite o nome do acólito.")
-        
-        st.markdown("---")
-        
-        # Lista de acólitos cadastrados
-        st.subheader("📋 Acólitos Cadastrados")
-        
-        acolitos = listar_acolitos()
-        
-        if not acolitos:
-            st.info("📭 Nenhum acólito cadastrado ainda.")
-        else:
-            st.markdown(f"**Total:** {len(acolitos)} acólito(s)")
-            st.markdown("")
-            
-            for acolito in acolitos:
-                col_nome, col_btn = st.columns([4, 1])
-                with col_nome:
-                    st.markdown(f"• **{acolito}**")
-                with col_btn:
-                    if st.button("🗑️ Remover", key=f"remover_acolito_{acolito}", 
-                               use_container_width=True, type="secondary"):
-                        if remover_acolito(acolito):
-                            st.success(f"Acólito '{acolito}' removido com sucesso!")
-                            st.rerun()
-                        else:
-                            st.error(f"Erro ao remover acólito '{acolito}'.")
-
-    # TAB 3: Ranking
-    with tab3:
-        st.header("🏆 Ranking Geral")
-        ranking = obter_ranking()
-        if ranking:
-            st.table([{"Posição": f"{i}º", "Nome": n, "Missas": p} for i, (n, p) in enumerate(ranking, 1)])
-        else:
-            st.info("Sem dados.")
+                                st.warning("Selecione um nome.")
+                                
+        if not encontrou_antiga:
+            st.info("Nenhuma missa antiga registrada ainda.")
 
 # ==================== LÓGICA PRINCIPAL ====================
 
@@ -883,6 +867,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
