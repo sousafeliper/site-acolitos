@@ -12,24 +12,44 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ==================== ESTILIZAÇÃO CSS ====================
+# ==================== ESTILIZAÇÃO CSS (CORRIGIDA) ====================
 st.markdown("""
     <style>
+        /* SOLUÇÃO DO TEMA: 
+           Usa variáveis nativas do Streamlit (var(--...)) para que as cores
+           se adaptem automaticamente ao Tema Claro ou Escuro selecionado pelo dispositivo.
+        */
+        
+        /* Forçar o app a usar as cores do tema, prevenindo fundo branco forçado */
+        .stApp {
+            background-color: var(--primary-background-color);
+            color: var(--text-color);
+        }
+
         /* Ajuste de espaçamento do topo */
         .block-container {
             padding-top: 2rem;
             padding-bottom: 3rem;
         }
+
         /* Remover menu padrão e rodapé para visual de app */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         .stDeployButton {display:none;}
         
-        /* Melhorar visual dos cards */
-        div[data-testid="stMetric"] {
-            background-color: rgba(255, 255, 255, 0.05);
+        /* Melhorar visual dos cards (Metrics e Containers) */
+        div[data-testid="stMetric"], div[data-testid="stContainer"] {
+            /* Fundo secundário adapta: cinza claro no Light Mode, cinza escuro no Dark Mode */
+            background-color: var(--secondary-background-color); 
             padding: 10px;
             border-radius: 10px;
+            /* Borda sutil para destacar do fundo */
+            border: 1px solid rgba(128, 128, 128, 0.2);
+        }
+
+        /* Ajuste para inputs ficarem legíveis em ambos os modos */
+        .stTextInput > div > div > input {
+            color: var(--text-color);
         }
     </style>
 """, unsafe_allow_html=True)
