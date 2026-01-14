@@ -4,75 +4,35 @@ import pytz
 from datetime import datetime, date, time, timedelta 
 from typing import List, Dict, Optional
 
-# ==================== CONFIGURAÇÃO INICIAL E ESTILO ====================
-
+# Configuração da página
 st.set_page_config(
     page_title="Escala de Acólitos",
     page_icon="⛪️",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-def aplicar_estilo():
-    """Aplica CSS personalizado para melhorar a UI"""
-    st.markdown("""
-        <style>
-            /* Fonte e cores gerais */
-            .stApp {
-                background-color: #f8f9fa;
-            }
-            
-            /* Estilo dos Cards (Containers com borda) */
-            div[data-testid="stVerticalBlockBorderWrapper"] {
-                background-color: white;
-                border-radius: 10px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-                padding: 1rem;
-                margin-bottom: 1rem;
-            }
-
-            /* Títulos centralizados na Login */
-            .login-header {
-                text-align: center;
-                color: #2c3e50;
-                margin-bottom: 2rem;
-            }
-            
-            /* Melhoria nos botões */
-            div.stButton > button {
-                border-radius: 8px;
-                font-weight: 600;
-                transition: all 0.3s ease;
-            }
-            
-            /* Remove menu padrão do Streamlit para visual app-like */
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            .stDeployButton {display:none;}
-            
-            /* Ajuste de Tabs */
-            .stTabs [data-baseweb="tab-list"] {
-                gap: 10px;
-            }
-            .stTabs [data-baseweb="tab"] {
-                height: 50px;
-                white-space: pre-wrap;
-                background-color: white;
-                border-radius: 5px;
-                padding: 10px 20px;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            }
-            .stTabs [aria-selected="true"] {
-                background-color: #e8f0fe;
-                color: #1a73e8;
-                border-bottom: 2px solid #1a73e8;
-            }
-        </style>
-    """, unsafe_allow_html=True)
-
-# Aplica o estilo imediatamente
-aplicar_estilo()
-
+# ==================== ESTILIZAÇÃO CSS ====================
+st.markdown("""
+    <style>
+        /* Ajuste de espaçamento do topo */
+        .block-container {
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+        }
+        /* Remover menu padrão e rodapé para visual de app */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        .stDeployButton {display:none;}
+        
+        /* Melhorar visual dos cards */
+        div[data-testid="stMetric"] {
+            background-color: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            border-radius: 10px;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 # ==================== FUNÇÃO DE CONEXÃO ====================
 
@@ -603,92 +563,94 @@ def remover_acolito(nome: str) -> bool:
 # ==================== FUNÇÕES DE INTERFACE ====================
 
 def tela_login():
-    """Renderiza a tela de login estilizada"""
-    # Espaçamento vertical
-    st.write("")
-    st.write("")
+    """Renderiza a tela de login"""
     
+    # Layout centralizado
     col_vazia_esq, col_centro, col_vazia_dir = st.columns([1, 1.5, 1])
     
     with col_centro:
-        # Card de Login centralizado
         with st.container(border=True):
-            st.markdown("<div class='login-header'><h1>⛪️</h1><h2>Escala de Acólitos</h2></div>", unsafe_allow_html=True)
+            st.markdown("<h1 style='text-align: center;'>⛪️</h1>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align: center;'>Escala de Acólitos</h2>", unsafe_allow_html=True)
+            st.caption("Sistema de agendamento e controle de escala")
+            st.divider()
             
-            st.markdown("### 👋 Bem-vindo!")
-            
+            st.markdown("##### 👤 Acesso do Acólito")
             # Buscar lista de acólitos cadastrados
             acolitos = listar_acolitos()
             
             if not acolitos:
-                st.warning("⚠️ Nenhum acólito cadastrado.")
-                st.info("Acesse como **Coordenador** para configurar a equipe.")
+                st.warning("⚠️ Nenhum acólito cadastrado. Solicite ao coordenador.")
                 nome_selecionado = None
             else:
                 nome_selecionado = st.selectbox(
-                    "Quem é você?",
+                    "Selecione seu nome",
                     options=[""] + acolitos,
                     key="select_nome",
                     index=0,
-                    placeholder="Selecione seu nome"
+                    placeholder="Clique para buscar seu nome"
                 )
             
-            # Botão de entrar com destaque
-            if st.button("Entrar no Sistema", type="primary", use_container_width=True):
-                if nome_selecionado and nome_selecionado.strip():
-                    st.session_state['usuario'] = nome_selecionado.strip()
-                    st.session_state['tela'] = 'escala'
-                    st.rerun()
-                else:
-                    st.toast("⚠️ Por favor, selecione seu nome.")
-            
-            st.markdown("---")
-            
-            # Área do Coordenador (Colapsible para não poluir)
-            with st.expander("🔐 Acesso Coordenador"):
-                senha = st.text_input("Senha de acesso", type="password", key="input_senha")
-                
-                if st.button("Entrar como Admin", use_container_width=True):
-                    if senha == st.secrets.get("ADMIN_SENHA", "admin"): # fallback seguro se nao tiver secret configurada para teste
-                        st.session_state['tela'] = 'admin'
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("Entrar no Sistema", type="primary", use_container_width=True):
+                    if nome_selecionado and nome_selecionado.strip():
+                        st.session_state['usuario'] = nome_selecionado.strip()
+                        st.session_state['tela'] = 'escala'
                         st.rerun()
                     else:
-                        st.error("Senha incorreta!")
+                        st.toast("⚠️ Por favor, selecione seu nome para continuar.")
+            
+            with col_btn2:
+                if st.button("Sair / Logout", use_container_width=True):
+                    if 'usuario' in st.session_state:
+                        del st.session_state['usuario']
+                    if 'tela' in st.session_state:
+                        del st.session_state['tela']
+                    st.rerun()
+            
+            st.divider()
+            
+            with st.expander("🔐 Área do Coordenador"):
+                is_coordenador = st.checkbox("Confirmar acesso administrativo")
+                if is_coordenador:
+                    senha = st.text_input("Senha de acesso", type="password", key="input_senha")
+                    if st.button("Acessar Painel", type="secondary", use_container_width=True):
+                        if senha == st.secrets["ADMIN_SENHA"]:
+                            st.session_state['tela'] = 'admin'
+                            st.rerun()
+                        else:
+                            st.error("Senha incorreta!")
 
 def tela_escala():
-    """Renderiza a tela principal do acólito"""
+    """Renderiza a tela de escala para acólitos"""
     nome = st.session_state.get('usuario', 'Usuário')
     
-    # --- SIDEBAR: Perfil do Usuário ---
-    with st.sidebar:
-        st.title("👤 Meu Perfil")
-        st.info(f"Logado como: **{nome}**")
-        
-        st.markdown("---")
-        if st.button("🚪 Sair", use_container_width=True, type="secondary"):
-            if 'usuario' in st.session_state:
-                del st.session_state['usuario']
-            if 'tela' in st.session_state:
-                del st.session_state['tela']
+    # Header personalizado com colunas
+    col_header, col_sair = st.columns([5, 1])
+    with col_header:
+        st.title(f"Olá, {nome}!")
+        st.caption(f"Bem-vindo(a) ao painel de escalas. Hoje é {date.today().strftime('%d/%m/%Y')}.")
+    with col_sair:
+        st.write("") # Espaço
+        if st.button("Sair", use_container_width=True):
+            if 'usuario' in st.session_state: del st.session_state['usuario']
+            if 'tela' in st.session_state: del st.session_state['tela']
             st.rerun()
-        
-        st.markdown("---")
-        st.caption("Sistema de Escala v2.0")
+    
+    st.divider()
+    
+    tab_missas, tab_ranking = st.tabs(["📅 Próximas Missas", "🏆 Ranking Geral"])
 
-    # --- ÁREA PRINCIPAL ---
-    st.subheader(f"Olá, {nome}!")
-    
-    tab_missas, tab_ranking = st.tabs(["📅 Missas Disponíveis", "🏆 Ranking & Estatísticas"])
-    
-    # === ABA 1: MISSAS ===
     with tab_missas:
+        st.subheader("Missas Disponíveis")
         missas = listar_missas_futuras()
         
         if not missas:
-            st.container(border=True).info("📭 Nenhuma missa agendada no momento. Aproveite o descanso!")
+            st.info("📭 Nenhuma missa agendada no momento. Aproveite o descanso!")
         else:
+            # Grid system para telas grandes
             for missa in missas:
-                # Filtro de tempo (ocultar missas que passaram há mais de 6h)
                 try:
                     fuso = pytz.timezone('America/Sao_Paulo')
                     agora = datetime.now(fuso)
@@ -697,228 +659,193 @@ def tela_escala():
                     if agora > (dt_missa + timedelta(hours=6)): continue
                 except: pass
                 
-                # Formatar data
-                try:
-                    data_obj = datetime.strptime(missa['data'], "%Y-%m-%d")
-                    dia_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][data_obj.weekday()]
-                    data_formatada = f"{data_obj.strftime('%d/%m/%Y')} ({dia_semana})"
-                except:
-                    data_formatada = missa['data']
-                
-                # CARD DA MISSA (Container com borda)
                 with st.container(border=True):
-                    # Cabeçalho do Card
-                    col_header, col_status = st.columns([3, 1])
-                    with col_header:
-                        st.markdown(f"#### ✝️ {missa['descricao'] or 'Santa Missa'}")
-                        st.markdown(f"📅 **{data_formatada}** |  ⏰ **{missa['hora']}**")
-                    
-                    with col_status:
-                         # Indicador visual de lotação
-                        vagas_preenchidas = missa['vagas_preenchidas']
-                        vagas_totais = missa['vagas_totais']
-                        if vagas_preenchidas >= vagas_totais:
-                            st.error("LOTADA", icon="🔒")
-                        else:
-                            st.success("ABERTA", icon="✨")
+                    # Formatação de data
+                    try:
+                        data_obj = datetime.strptime(missa['data'], "%Y-%m-%d")
+                        dia_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][data_obj.weekday()]
+                        data_formatada = data_obj.strftime("%d/%m")
+                    except:
+                        data_formatada = missa['data']
+                        dia_semana = ""
 
-                    st.markdown("---")
+                    # Layout do Card
+                    c_info, c_action = st.columns([3, 1.5])
                     
-                    # Corpo do Card
-                    c_detalhes, c_acao = st.columns([2, 1])
-                    
-                    with c_detalhes:
-                        # Lista de inscritos
+                    with c_info:
+                        st.markdown(f"#### {missa['descricao'] or 'Santa Missa'}")
+                        st.markdown(f"🗓️ **{dia_semana}, {data_formatada}** às **{missa['hora']}**")
+                        
                         nomes_inscritos = missa.get('nomes_inscritos', [])
                         if nomes_inscritos:
-                            st.markdown("**Acólitos Escalados:**")
-                            for n in nomes_inscritos:
-                                st.markdown(f"- {n}")
+                            nomes_formatados = ", ".join(nomes_inscritos)
+                            st.info(f"**Escalados:** {nomes_formatados}")
                         else:
-                            st.caption("*Nenhum inscrito ainda. Seja o primeiro!*")
+                            st.caption("Ainda sem inscritos.")
                             
                         # Barra de progresso visual
+                        vagas_preenchidas = missa['vagas_preenchidas']
+                        vagas_totais = missa['vagas_totais']
                         progresso = vagas_preenchidas / vagas_totais if vagas_totais > 0 else 0
                         st.progress(progresso)
-                        st.caption(f"Vagas: {vagas_preenchidas}/{vagas_totais} preenchidas")
+                        st.caption(f"Vagas: {vagas_preenchidas} de {vagas_totais} preenchidas")
 
-                    with c_acao:
-                        # Botões de Ação
+                    with c_action:
+                        st.write("") # Espaçamento vertical
                         esta_inscrito = verificar_inscricao(missa['id'], nome)
                         tem_vaga = vagas_preenchidas < vagas_totais
                         
-                        st.write("") # Espaçamento para alinhar verticalmente
-                        
                         if esta_inscrito:
-                            if st.button("❌ Cancelar", key=f"sair_{missa['id']}", 
-                                       use_container_width=True, type="secondary", 
-                                       help="Remover meu nome da lista"):
+                            if st.button("❌ Sair", key=f"sair_{missa['id']}", 
+                                         use_container_width=True, type="secondary", 
+                                         help="Cancelar sua participação nesta missa"):
                                 if desinscrever_acolito(missa['id'], nome):
-                                    st.toast("Inscrição cancelada com sucesso!")
+                                    st.success("Removido!")
                                     st.rerun()
                                 else:
                                     st.error("Erro ao sair.")
                         elif tem_vaga:
-                            if st.button("✅ Servir nesta Missa", key=f"servir_{missa['id']}", 
-                                       use_container_width=True, type="primary"):
+                            if st.button("✅ Servir", key=f"servir_{missa['id']}", 
+                                         use_container_width=True, type="primary",
+                                         help="Confirmar presença nesta missa"):
                                 if inscrever_acolito(missa['id'], nome):
-                                    st.balloons()
+                                    st.canvas_event = True # Hack visual
                                     st.success("Confirmado!")
                                     st.rerun()
                                 else:
-                                    st.error("Não foi possível inscrever.")
+                                    st.error("Erro: Vaga ocupada.")
                         else:
-                            st.button("🔒 Lista Completa", key=f"lotado_{missa['id']}", 
-                                    use_container_width=True, disabled=True)
+                            st.button("🔒 Lotado", key=f"lotado_{missa['id']}", 
+                                      use_container_width=True, disabled=True)
 
-    # === ABA 2: RANKING ===
     with tab_ranking:
-        st.subheader("🏆 Quadro de Honra")
-        st.markdown("Ranking contabilizado apenas após a realização das missas (+6h).")
-        
+        st.subheader("Quadro de Honra")
+        st.caption("Pontuação baseada em missas servidas.")
         ranking = obter_ranking()
         
         if ranking:
-            # Top 3 em destaque
-            top3_cols = st.columns(3)
-            for i, (nome_r, pontos) in enumerate(ranking[:3]):
-                medalhas = ["🥇", "🥈", "🥉"]
-                with top3_cols[i]:
-                    with st.container(border=True):
-                        st.markdown(f"<h1 style='text-align: center;'>{medalhas[i]}</h1>", unsafe_allow_html=True)
-                        st.markdown(f"<h4 style='text-align: center;'>{nome_r}</h4>", unsafe_allow_html=True)
-                        st.markdown(f"<p style='text-align: center;'>{pontos} Missas</p>", unsafe_allow_html=True)
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                # Destaque para o Top 3
+                top3 = ranking[:3]
+                for i, (nome_r, pontos) in enumerate(top3, 1):
+                    emoji = "🥇" if i==1 else "🥈" if i==2 else "🥉"
+                    st.metric(label=f"{emoji} {i}º Lugar", value=str(pontos), delta=nome_r)
             
-            # Tabela completa
-            if len(ranking) > 3:
-                st.markdown("### Classificação Geral")
-                for i, (nome_r, pontos) in enumerate(ranking[3:], 4):
+            with col2:
+                # Tabela completa
+                st.markdown("**Classificação Completa**")
+                for i, (nome_r, pontos) in enumerate(ranking, 1):
                     with st.container(border=True):
-                        col_pos, col_nom, col_pts = st.columns([1, 4, 2])
-                        col_pos.write(f"**{i}º**")
-                        col_nom.write(nome_r)
-                        col_pts.write(f"{pontos} pts")
+                        cl1, cl2 = st.columns([4, 1])
+                        cl1.markdown(f"**{i}º** {nome_r}")
+                        cl2.markdown(f"**{pontos}** pts")
         else:
-            st.info("Nenhum ponto contabilizado ainda.")
+            st.info("O ranking será atualizado após a realização das primeiras missas.")
 
 def tela_admin():
-    """Renderiza a tela de administração organizada"""
+    """Renderiza a tela de administração"""
     st.title("⚙️ Painel do Coordenador")
+    st.markdown("Gerencie missas, equipe e pontuações.")
     
-    # Botão de voltar discreto no topo
-    if st.button("← Sair do Painel Admin", type="secondary"):
+    if st.button("← Sair do Painel Admin"):
         if 'tela' in st.session_state: del st.session_state['tela']
         st.rerun()
     
-    st.markdown("---")
+    st.divider()
     
-    # Tabs com ícones
-    tab1, tab2, tab3, tab4 = st.tabs(["➕ Gerenciar Missas", "👥 Equipe de Acólitos", "📊 Ranking Geral", "📜 Histórico/Correção"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Agenda", "👥 Equipe", "🏆 Ranking", "📜 Histórico"])
     
-    # --- ABA 1: MISSAS ---
+    # --- ABA 1: MISSAS FUTURAS ---
     with tab1:
         col_form, col_lista = st.columns([1, 2])
         
         with col_form:
             with st.container(border=True):
-                st.subheader("Nova Missa")
-                with st.form("form_nova_missa"):
+                st.subheader("➕ Nova Missa")
+                with st.form("form_nova_missa", border=False):
                     data = st.date_input("Data", min_value=date.today())
                     hora = st.time_input("Hora", value=time(19, 0))
                     descricao = st.text_input("Descrição", placeholder="Ex: Missa Solene")
-                    vagas_totais = st.number_input("Nº Vagas", 1, 20, 4)
+                    vagas_totais = st.number_input("Vagas", 1, 20, 4)
                     
-                    if st.form_submit_button("📅 Criar Agenda", type="primary", use_container_width=True):
+                    if st.form_submit_button("Cadastrar Missa", type="primary", use_container_width=True):
                         if cadastrar_missa(data.strftime("%Y-%m-%d"), hora.strftime("%H:%M"), descricao, vagas_totais):
                             st.toast("Missa criada com sucesso!")
                             st.rerun()
         
         with col_lista:
-            st.subheader("Próximas Celebrações")
+            st.subheader("Gerenciar Agendamentos")
             missas = listar_todas_missas()
+            if not missas: st.info("Nenhuma missa cadastrada.")
             
-            # Filtro visual apenas para limpar a lista do admin
-            missas_futuras = []
-            for m in missas:
+            for missa in missas:
+                # FILTRO: Só mostra missas que AINDA VÃO ACONTECER (ou recentes)
                 try:
                     fuso = pytz.timezone('America/Sao_Paulo')
                     agora = datetime.now(fuso)
-                    dt_missa = fuso.localize(datetime.strptime(f"{m['data']} {m['hora']}", "%Y-%m-%d %H:%M"))
-                    if agora <= (dt_missa + timedelta(hours=6)):
-                        missas_futuras.append(m)
+                    dt_missa = fuso.localize(datetime.strptime(f"{missa['data']} {missa['hora']}", "%Y-%m-%d %H:%M"))
+                    if agora > (dt_missa + timedelta(hours=6)): continue 
                 except: pass
-            
-            if not missas_futuras:
-                st.info("Nenhuma missa futura cadastrada.")
-            
-            for missa in missas_futuras:
-                with st.expander(f"🗓️ {missa['data']} - {missa['descricao']} ({missa['hora']})"):
+
+                with st.expander(f"📿 {missa['data']} - {missa['descricao'] or 'Missa'} ({missa['hora']})", expanded=False):
                     c1, c2 = st.columns([3, 1])
-                    
                     with c1:
-                        st.markdown(f"**Ocupação:** {missa['vagas_preenchidas']}/{missa['vagas_totais']}")
-                        st.markdown("**Inscritos:**")
+                        st.write(f"**Lotação:** {missa['vagas_preenchidas']}/{missa['vagas_totais']}")
                         inscritos = listar_inscritos(missa['id'])
                         if inscritos:
+                            st.markdown("---")
                             for u in inscritos:
-                                cx, cy = st.columns([3, 1])
+                                cx, cy = st.columns([4, 1])
                                 cx.text(f"• {u}")
-                                if cy.button("❌", key=f"rm_{missa['id']}_{u}", help="Remover acolito"):
+                                if cy.button("❌", key=f"rm_{missa['id']}_{u}", help="Remover inscrito"):
                                     remover_inscricao_admin(missa['id'], u)
                                     st.rerun()
                         else:
-                            st.caption("Nenhum inscrito.")
+                            st.caption("Sem inscritos.")
                     
                     with c2:
                         st.write("")
-                        if st.button("🗑️ Excluir", key=f"del_{missa['id']}", type="secondary", use_container_width=True):
+                        if st.button("🗑️ Excluir", key=f"del_{missa['id']}", type="primary", use_container_width=True):
                             excluir_missa(missa['id'])
                             st.rerun()
 
     # --- ABA 2: EQUIPE ---
     with tab2:
-        col_add, col_ver = st.columns([1, 2])
-        
+        col_add, col_view = st.columns([1, 2])
         with col_add:
             with st.container(border=True):
-                st.subheader("Novo Membro")
-                with st.form("add_ac"):
-                    nome = st.text_input("Nome Completo")
+                st.subheader("Novo Acólito")
+                with st.form("add_ac", border=False):
+                    nome = st.text_input("Nome completo")
                     if st.form_submit_button("Adicionar", type="primary", use_container_width=True):
                         if cadastrar_acolito(nome): 
-                            st.success(f"{nome} adicionado!")
+                            st.toast("Acólito cadastrado!")
                             st.rerun()
         
-        with col_ver:
-            st.subheader("Membros Ativos")
-            todos_acolitos = listar_acolitos()
-            if todos_acolitos:
-                for ac in todos_acolitos:
-                    with st.container(border=True):
-                        c1, c2 = st.columns([4, 1])
-                        c1.write(f"👤 **{ac}**")
-                        if c2.button("🗑️", key=f"del_ac_{ac}"):
-                            remover_acolito(ac)
-                            st.rerun()
-            else:
-                st.warning("Nenhum membro cadastrado.")
+        with col_view:
+            st.subheader("Acólitos Ativos")
+            for ac in listar_acolitos():
+                with st.container(border=True):
+                    c1, c2 = st.columns([4,1])
+                    c1.write(f"👤 {ac}")
+                    if c2.button("🗑️", key=f"del_ac_{ac}", help="Remover acólito"):
+                        remover_acolito(ac)
+                        st.rerun()
 
     # --- ABA 3: RANKING ---
     with tab3:
-        st.subheader("Relatório de Presença")
+        st.subheader("Ranking Geral")
         r = obter_ranking()
-        if r:
-            # Usando st.dataframe para uma view mais limpa no admin
-            import pandas as pd
-            df = pd.DataFrame(r, columns=["Nome", "Missas Servidas"])
-            df.index += 1
-            st.dataframe(df, use_container_width=True)
-        else:
+        if r: 
+            st.table([{"Posição": f"{i}º", "Nome": n, "Missas Servidas": p} for i, (n,p) in enumerate(r,1)])
+        else: 
             st.info("Sem dados de pontuação.")
 
     # --- ABA 4: HISTÓRICO ---
     with tab4:
-        st.info("📝 Use esta área para corrigir presenças em missas que já ocorreram.")
+        st.subheader("📜 Histórico e Correção")
+        st.caption("Missas finalizadas (+6h). Use para corrigir presenças e pontuações.")
         
         missas = listar_todas_missas()
         lista_completa_acolitos = listar_acolitos()
@@ -936,36 +863,38 @@ def tela_admin():
             except: pass
             
             if mostrar:
-                with st.expander(f"✅ {missa['data']} | {missa['descricao']}"):
+                with st.expander(f"✅ REALIZADA: {missa['data']} - {missa['descricao']} ({missa['hora']})"):
                     col_lista, col_add = st.columns([1, 1])
                     
                     with col_lista:
-                        st.caption("Quem serviu (Pontuou):")
+                        st.markdown("**Quem serviu (Pontuou):**")
                         inscritos = listar_inscritos(missa['id'])
                         if inscritos:
                             for u in inscritos:
                                 c_nome, c_del = st.columns([3, 1])
-                                c_nome.write(f"• {u}")
-                                if c_del.button("➖", key=f"hist_rm_{missa['id']}_{u}", help="Remover ponto"):
+                                c_nome.text(f"• {u}")
+                                if c_del.button("Retirar", key=f"hist_rm_{missa['id']}_{u}", help="Remove pontuação"):
                                     remover_inscricao_admin(missa['id'], u)
                                     st.rerun()
                         else:
-                            st.warning("Registro vazio.")
+                            st.caption("Nenhum registro.")
                     
                     with col_add:
-                        st.caption("Adicionar manualmente:")
+                        st.markdown("**Adicionar (Dar Ponto):**")
                         quem_add = st.selectbox("Acólito:", [""] + lista_completa_acolitos, key=f"sel_add_{missa['id']}")
                         
-                        if st.button("➕ Adicionar Presença", key=f"btn_add_{missa['id']}"):
+                        if st.button("Adicionar Manualmente", key=f"btn_add_{missa['id']}", use_container_width=True):
                             if quem_add:
                                 if inscrever_acolito(missa['id'], quem_add):
                                     st.success(f"Ponto +1 para {quem_add}!")
                                     st.rerun()
                                 else:
-                                    st.error("Erro ao adicionar (lotado ou duplicado).")
-        
+                                    st.error("Erro: Lotado ou já inscrito.")
+                            else:
+                                st.warning("Selecione um nome.")
+                        
         if not encontrou_antiga:
-            st.write("Nenhuma missa passada para exibir.")
+            st.info("Nenhuma missa passada para exibir.")
 
 # ==================== LÓGICA PRINCIPAL ====================
 
