@@ -144,6 +144,35 @@ def arquivar_missas_antigas():
         if cursor: cursor.close()
         if conn: conn.close()
 
+def obter_missa_por_id(missa_id: int) -> Optional[Dict]:
+    """Busca dados frescos de uma única missa para o fragmento"""
+    conn = get_db_connection()
+    if not conn: return None
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT m.id, m.data, m.hora, m.descricao, m.vagas_totais,
+                   COUNT(i.id) as vagas_preenchidas,
+                   STRING_AGG(i.nome_acolito, ', ' ORDER BY i.nome_acolito) as nomes_inscritos
+            FROM missas m
+            LEFT JOIN inscricoes i ON m.id = i.missa_id
+            WHERE m.id = %s
+            GROUP BY m.id
+        """, (missa_id,))
+        row = cursor.fetchone()
+        if row:
+            nomes = row[6] if row[6] else None
+            nomes_lista = [nome.strip() for nome in nomes.split(',')] if nomes else []
+            return {
+                'id': row[0], 'data': row[1], 'hora': row[2], 'descricao': row[3],
+                'vagas_totais': row[4], 'vagas_preenchidas': row[5] or 0, 'nomes_inscritos': nomes_lista
+            }
+        return None
+    except Exception: return None
+    finally:
+        cursor.close()
+        conn.close()
+
 def listar_missas_futuras() -> List[Dict]:
     conn = get_db_connection()
     if not conn: return []
@@ -249,23 +278,16 @@ def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int) -> 
         if conn: conn.close()
 
 def obter_ranking_filtrado(periodo: str = 'anual', data_referencia: date = None):
-    """
-    Calcula o ranking consolidando dados ativos e históricos.
-    Permite passar uma data de referência para visualizar rankings passados.
-    Se data_referencia for None, usa a data de hoje.
-    """
     conn = get_db_connection()
     if not conn: return []
     cur = conn.cursor()
     
-    # 1. Pegar dados ativos (apenas missas passadas)
     cur.execute("""
         SELECT i.nome_acolito, m.data, m.hora 
         FROM inscricoes i JOIN missas m ON i.missa_id = m.id
     """)
     dados_ativos = cur.fetchall()
     
-    # 2. Pegar dados históricos
     cur.execute("SELECT nome_acolito, data_missa FROM historico_pontos")
     dados_historicos = cur.fetchall()
     conn.close()
@@ -274,21 +296,17 @@ def obter_ranking_filtrado(periodo: str = 'anual', data_referencia: date = None)
     fuso = pytz.timezone('America/Sao_Paulo')
     agora = datetime.now(fuso)
     
-    # Define a data de referência (padrão é hoje)
     data_ref = data_referencia if data_referencia else date.today()
 
-    # Processar ativos (validar horário)
     for nome, data_str, hora_str in dados_ativos:
         try:
             dt_str = f"{data_str} {hora_str}"
             dt_missa = fuso.localize(datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
-            # Se já passou 6 horas, conta
             if agora > (dt_missa + timedelta(hours=6)):
                 data_obj = dt_missa.date()
                 aplicar_filtro_e_pontuar(pontuacao, nome, data_obj, periodo, data_ref)
         except: continue
 
-    # Processar históricos
     for nome, data_obj in dados_historicos:
         if isinstance(data_obj, str):
             try: data_obj = datetime.strptime(data_obj, "%Y-%m-%d").date()
@@ -298,27 +316,16 @@ def obter_ranking_filtrado(periodo: str = 'anual', data_referencia: date = None)
     return sorted(pontuacao.items(), key=lambda x: x[1], reverse=True)
 
 def aplicar_filtro_e_pontuar(pontuacao_dict, nome, data_missa, periodo, data_ref):
-    """
-    Verifica se a data da missa corresponde ao período da data de referência.
-    data_ref: A data que o usuário escolheu (ou hoje) para basear o ranking.
-    """
-    # Filtro Anual (Ano da missa == Ano da referência)
-    if data_missa.year != data_ref.year:
-        return
+    if data_missa.year != data_ref.year: return
 
-    # Filtro Trimestral
     if periodo == 'trimestral':
         trimestre_ref = (data_ref.month - 1) // 3 + 1
         trimestre_missa = (data_missa.month - 1) // 3 + 1
-        if trimestre_ref != trimestre_missa:
-            return
+        if trimestre_ref != trimestre_missa: return
             
-    # Filtro Mensal (Mês da missa == Mês da referência)
     if periodo == 'mensal':
-        if data_missa.month != data_ref.month:
-            return
+        if data_missa.month != data_ref.month: return
 
-    # Se passou nos filtros, pontua
     pontuacao_dict[nome] = pontuacao_dict.get(nome, 0) + 1
 
 def listar_todas_missas() -> List[Dict]:
@@ -359,10 +366,6 @@ def listar_inscritos(missa_id: int) -> List[str]:
         if conn: conn.close()
 
 def excluir_missa(missa_id: int) -> bool:
-    """
-    Exclui manualmente. Para preservar histórico, 
-    copiamos para historico_pontos antes de excluir.
-    """
     conn = get_db_connection()
     if not conn: return False
     cursor = None
@@ -450,6 +453,60 @@ def remover_acolito(nome: str) -> bool:
 
 # ==================== FUNÇÕES DE INTERFACE ====================
 
+@st.fragment
+def renderizar_card_missa(missa_id: int, nome_usuario: str):
+    """
+    Componente fragmentado: Atualiza apenas este card quando o usuário interage.
+    """
+    # 1. BUSCAR DADOS ATUALIZADOS DO BANCO
+    missa = obter_missa_por_id(missa_id)
+    
+    if not missa:
+        st.error("Missa não encontrada.")
+        return
+
+    # Lógica de formatação de data
+    try:
+        d_obj = datetime.strptime(missa['data'], "%Y-%m-%d")
+        d_fmt = d_obj.strftime("%d/%m")
+        dia = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][d_obj.weekday()]
+    except: d_fmt, dia = missa['data'], ""
+
+    # 2. DESENHAR O CARD
+    with st.container(border=True):
+        c_info, c_action = st.columns([3, 1.5])
+        
+        with c_info:
+            st.markdown(f"#### {missa['descricao'] or 'Santa Missa'}")
+            st.markdown(f"🗓️ **{dia}, {d_fmt}** às **{missa['hora']}**")
+            
+            if missa['nomes_inscritos']:
+                st.info(f"**Escalados:** {', '.join(missa['nomes_inscritos'])}")
+            else: 
+                st.caption("Sem inscritos.")
+            
+            # Barra de progresso
+            progresso = missa['vagas_preenchidas'] / missa['vagas_totais'] if missa['vagas_totais'] > 0 else 0
+            st.progress(progresso)
+            st.caption(f"{missa['vagas_preenchidas']}/{missa['vagas_totais']} vagas")
+
+        with c_action:
+            st.write("") # Espaçamento
+            esta_inscrito = verificar_inscricao(missa['id'], nome_usuario)
+            
+            # 3. AÇÃO DOS BOTÕES (Sem st.rerun)
+            if esta_inscrito:
+                if st.button("❌ Sair", key=f"btn_sair_{missa['id']}", type="secondary", use_container_width=True):
+                    if desinscrever_acolito(missa['id'], nome_usuario):
+                        st.toast("Você saiu da escala.")
+                    
+            elif missa['vagas_preenchidas'] < missa['vagas_totais']:
+                if st.button("✅ Servir", key=f"btn_entrar_{missa['id']}", type="primary", use_container_width=True):
+                    if inscrever_acolito(missa['id'], nome_usuario):
+                        st.toast("Inscrição confirmada!")
+            else:
+                st.button("🔒 Lotado", key=f"btn_lotado_{missa['id']}", disabled=True, use_container_width=True)
+
 def tela_login():
     col_vazia_esq, col_centro, col_vazia_dir = st.columns([1, 1.5, 1])
     with col_centro:
@@ -526,39 +583,10 @@ def tela_escala():
                     if agora > (dt_missa + timedelta(hours=6)): continue
                 except: pass
                 
-                with st.container(border=True):
-                    try:
-                        d_obj = datetime.strptime(missa['data'], "%Y-%m-%d")
-                        d_fmt = d_obj.strftime("%d/%m")
-                        dia = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][d_obj.weekday()]
-                    except: d_fmt, dia = missa['data'], ""
-
-                    c_info, c_action = st.columns([3, 1.5])
-                    with c_info:
-                        st.markdown(f"#### {missa['descricao'] or 'Santa Missa'}")
-                        st.markdown(f"🗓️ **{dia}, {d_fmt}** às **{missa['hora']}**")
-                        if missa['nomes_inscritos']:
-                            st.info(f"**Escalados:** {', '.join(missa['nomes_inscritos'])}")
-                        else: st.caption("Sem inscritos.")
-                        st.progress(missa['vagas_preenchidas'] / missa['vagas_totais'] if missa['vagas_totais'] > 0 else 0)
-                        st.caption(f"{missa['vagas_preenchidas']}/{missa['vagas_totais']} vagas")
-
-                    with c_action:
-                        st.write("")
-                        esta_inscrito = verificar_inscricao(missa['id'], nome)
-                        if esta_inscrito:
-                            if st.button("❌ Sair", key=f"s_{missa['id']}", type="secondary", use_container_width=True):
-                                desinscrever_acolito(missa['id'], nome)
-                                st.rerun()
-                        elif missa['vagas_preenchidas'] < missa['vagas_totais']:
-                            if st.button("✅ Servir", key=f"e_{missa['id']}", type="primary", use_container_width=True):
-                                inscrever_acolito(missa['id'], nome)
-                                st.rerun()
-                        else:
-                            st.button("🔒 Lotado", key=f"l_{missa['id']}", disabled=True, use_container_width=True)
+                # Renderiza o fragmento individual
+                renderizar_card_missa(missa['id'], nome)
 
     with tab_ranking:
-        # ACOLITOS VÊEM APENAS O MENSAL ATUAL (Sem seletor)
         st.subheader(f"Ranking de {date.today().strftime('%B').capitalize()}")
         ranking = obter_ranking_filtrado('mensal') # Sem data = usa Hoje
         if ranking:
@@ -610,7 +638,6 @@ def tela_admin():
             st.subheader("Missas Ativas")
             missas = listar_todas_missas()
             for m in missas:
-                # Filtro visual de missas passadas (mas ainda no DB)
                 try:
                     fuso = pytz.timezone('America/Sao_Paulo')
                     agora = datetime.now(fuso)
@@ -648,10 +675,8 @@ def tela_admin():
                     remover_acolito(ac)
                     st.rerun()
 
-    with tab3: # RANKINGS (Com seletor de data para o Coordenador)
+    with tab3: # RANKINGS
         st.subheader("Painel de Pontuação")
-        
-        # Seleção de Referência Temporal
         st.caption("Selecione o período de referência para visualizar os rankings passados.")
         c_mes, c_ano, c_vazio = st.columns([1, 1, 2])
         
@@ -666,7 +691,6 @@ def tela_admin():
         with c_ano:
             sel_ano = st.number_input("Ano de Referência", min_value=2024, max_value=2030, value=hj.year)
             
-        # Data base construída a partir da seleção
         data_referencia = date(sel_ano, sel_mes_num, 1)
 
         rt1, rt2, rt3 = st.tabs(["📅 Mensal", "📊 Trimestral", "📆 Anual"])
@@ -679,7 +703,7 @@ def tela_admin():
         with rt3:
             render_ranking_table(obter_ranking_filtrado('anual', data_referencia), f"Ranking: Ano {sel_ano}")
 
-    with tab4: # HISTORICO (Correção manual)
+    with tab4: # HISTORICO
         st.info("Missas finalizadas (+6h) que ainda não foram arquivadas.")
         missas = listar_todas_missas()
         for m in missas:
@@ -705,8 +729,6 @@ def tela_admin():
 
 def main():
     criar_tabelas()
-    
-    # Rotina automática: arquivar missas > 2 semanas
     arquivar_missas_antigas()
     
     if 'tela' not in st.session_state:
