@@ -66,7 +66,6 @@ def criar_tabelas():
     try:
         cursor = conn.cursor()
         
-        # Tabela de missas
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS missas (
                 id SERIAL PRIMARY KEY,
@@ -77,7 +76,6 @@ def criar_tabelas():
             )
         """)
         
-        # Tabela de inscrições
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS inscricoes (
                 id SERIAL PRIMARY KEY,
@@ -88,14 +86,12 @@ def criar_tabelas():
             )
         """)
         
-        # Tabela de acólitos
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS acolitos (
                 nome TEXT PRIMARY KEY
             )
         """)
         
-        # NOVA TABELA: Histórico de Pontos (para persistência após exclusão da missa)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS historico_pontos (
                 id SERIAL PRIMARY KEY,
@@ -124,16 +120,13 @@ def arquivar_missas_antigas():
     try:
         cursor = conn.cursor()
         
-        # Data limite: hoje - 14 dias
         hoje = date.today()
         data_limite = (hoje - timedelta(days=14)).strftime("%Y-%m-%d")
         
-        # 1. Identificar missas antigas
         cursor.execute("SELECT id, data FROM missas WHERE data < %s", (data_limite,))
         missas_antigas = cursor.fetchall()
         
         for m_id, m_data in missas_antigas:
-            # 2. Copiar inscritos para histórico_pontos
             cursor.execute("""
                 INSERT INTO historico_pontos (nome_acolito, data_missa)
                 SELECT nome_acolito, %s 
@@ -141,12 +134,10 @@ def arquivar_missas_antigas():
                 WHERE missa_id = %s
             """, (m_data, m_id))
             
-            # 3. Excluir missa (Cascade apaga inscrições, mas já copiamos para histórico)
             cursor.execute("DELETE FROM missas WHERE id = %s", (m_id,))
             
         conn.commit()
     except psycopg2.Error as e:
-        # Silencioso no frontend para não assustar usuário, log no console se possível
         print(f"Erro ao arquivar: {e}") 
         if conn: conn.rollback()
     finally:
@@ -257,13 +248,11 @@ def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int) -> 
         if cursor: cursor.close()
         if conn: conn.close()
 
-def obter_ranking_filtrado(periodo: str = 'anual'):
+def obter_ranking_filtrado(periodo: str = 'anual', data_referencia: date = None):
     """
-    Calcula o ranking consolidando:
-    1. Tabela 'inscricoes' (Missas ativas que já aconteceram +6h)
-    2. Tabela 'historico_pontos' (Missas arquivadas/excluídas)
-    
-    periodo: 'mensal', 'trimestral', 'anual'
+    Calcula o ranking consolidando dados ativos e históricos.
+    Permite passar uma data de referência para visualizar rankings passados.
+    Se data_referencia for None, usa a data de hoje.
     """
     conn = get_db_connection()
     if not conn: return []
@@ -284,7 +273,9 @@ def obter_ranking_filtrado(periodo: str = 'anual'):
     pontuacao = {}
     fuso = pytz.timezone('America/Sao_Paulo')
     agora = datetime.now(fuso)
-    hoje = date.today()
+    
+    # Define a data de referência (padrão é hoje)
+    data_ref = data_referencia if data_referencia else date.today()
 
     # Processar ativos (validar horário)
     for nome, data_str, hora_str in dados_ativos:
@@ -294,21 +285,24 @@ def obter_ranking_filtrado(periodo: str = 'anual'):
             # Se já passou 6 horas, conta
             if agora > (dt_missa + timedelta(hours=6)):
                 data_obj = dt_missa.date()
-                aplicar_filtro_e_pontuar(pontuacao, nome, data_obj, periodo, hoje)
+                aplicar_filtro_e_pontuar(pontuacao, nome, data_obj, periodo, data_ref)
         except: continue
 
-    # Processar históricos (já são passados, apenas validar data)
+    # Processar históricos
     for nome, data_obj in dados_historicos:
         if isinstance(data_obj, str):
             try: data_obj = datetime.strptime(data_obj, "%Y-%m-%d").date()
             except: continue
-        aplicar_filtro_e_pontuar(pontuacao, nome, data_obj, periodo, hoje)
+        aplicar_filtro_e_pontuar(pontuacao, nome, data_obj, periodo, data_ref)
 
     return sorted(pontuacao.items(), key=lambda x: x[1], reverse=True)
 
 def aplicar_filtro_e_pontuar(pontuacao_dict, nome, data_missa, periodo, data_ref):
-    """Auxiliar para verificar se a data entra no período solicitado"""
-    # Filtro Anual
+    """
+    Verifica se a data da missa corresponde ao período da data de referência.
+    data_ref: A data que o usuário escolheu (ou hoje) para basear o ranking.
+    """
+    # Filtro Anual (Ano da missa == Ano da referência)
     if data_missa.year != data_ref.year:
         return
 
@@ -319,7 +313,7 @@ def aplicar_filtro_e_pontuar(pontuacao_dict, nome, data_missa, periodo, data_ref
         if trimestre_ref != trimestre_missa:
             return
             
-    # Filtro Mensal
+    # Filtro Mensal (Mês da missa == Mês da referência)
     if periodo == 'mensal':
         if data_missa.month != data_ref.month:
             return
@@ -375,12 +369,10 @@ def excluir_missa(missa_id: int) -> bool:
     try:
         cursor = conn.cursor()
         
-        # Obter data da missa
         cursor.execute("SELECT data FROM missas WHERE id = %s", (missa_id,))
         res = cursor.fetchone()
         if res:
             data_missa = res[0]
-            # Copiar para histórico
             cursor.execute("""
                 INSERT INTO historico_pontos (nome_acolito, data_missa)
                 SELECT nome_acolito, %s FROM inscricoes WHERE missa_id = %s
@@ -566,9 +558,9 @@ def tela_escala():
                             st.button("🔒 Lotado", key=f"l_{missa['id']}", disabled=True, use_container_width=True)
 
     with tab_ranking:
-        # ACOLITOS VÊEM APENAS O MENSAL
+        # ACOLITOS VÊEM APENAS O MENSAL ATUAL (Sem seletor)
         st.subheader(f"Ranking de {date.today().strftime('%B').capitalize()}")
-        ranking = obter_ranking_filtrado('mensal')
+        ranking = obter_ranking_filtrado('mensal') # Sem data = usa Hoje
         if ranking:
             for i, (nome_r, pontos) in enumerate(ranking, 1):
                 st.write(f"**{i}º** {nome_r} - {pontos} pts")
@@ -656,16 +648,36 @@ def tela_admin():
                     remover_acolito(ac)
                     st.rerun()
 
-    with tab3: # RANKINGS (Coordenador vê tudo)
+    with tab3: # RANKINGS (Com seletor de data para o Coordenador)
         st.subheader("Painel de Pontuação")
+        
+        # Seleção de Referência Temporal
+        st.caption("Selecione o período de referência para visualizar os rankings passados.")
+        c_mes, c_ano, c_vazio = st.columns([1, 1, 2])
+        
+        meses = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho',
+                 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+        
+        hj = date.today()
+        
+        with c_mes:
+            sel_mes_num = st.selectbox("Mês de Referência", options=list(meses.keys()), 
+                                       format_func=lambda x: meses[x], index=hj.month-1)
+        with c_ano:
+            sel_ano = st.number_input("Ano de Referência", min_value=2024, max_value=2030, value=hj.year)
+            
+        # Data base construída a partir da seleção
+        data_referencia = date(sel_ano, sel_mes_num, 1)
+
         rt1, rt2, rt3 = st.tabs(["📅 Mensal", "📊 Trimestral", "📆 Anual"])
         
         with rt1:
-            render_ranking_table(obter_ranking_filtrado('mensal'), "Mês Atual")
+            render_ranking_table(obter_ranking_filtrado('mensal', data_referencia), f"Ranking: {meses[sel_mes_num]}/{sel_ano}")
         with rt2:
-            render_ranking_table(obter_ranking_filtrado('trimestral'), "Trimestre Atual")
+            trimestre = (sel_mes_num - 1) // 3 + 1
+            render_ranking_table(obter_ranking_filtrado('trimestral', data_referencia), f"Ranking: {trimestre}º Trimestre/{sel_ano}")
         with rt3:
-            render_ranking_table(obter_ranking_filtrado('anual'), "Ano Atual")
+            render_ranking_table(obter_ranking_filtrado('anual', data_referencia), f"Ranking: Ano {sel_ano}")
 
     with tab4: # HISTORICO (Correção manual)
         st.info("Missas finalizadas (+6h) que ainda não foram arquivadas.")
@@ -695,7 +707,6 @@ def main():
     criar_tabelas()
     
     # Rotina automática: arquivar missas > 2 semanas
-    # Isso limpa a visualização mas mantém os pontos nos rankings
     arquivar_missas_antigas()
     
     if 'tela' not in st.session_state:
