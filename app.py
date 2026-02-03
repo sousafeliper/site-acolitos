@@ -2,7 +2,7 @@ import streamlit as st
 import psycopg2
 import pytz 
 from datetime import datetime, date, time, timedelta 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 # Configuração da página
 st.set_page_config(
@@ -12,42 +12,27 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ==================== ESTILIZAÇÃO CSS (CORRIGIDA) ====================
+# ==================== ESTILIZAÇÃO CSS ====================
 st.markdown("""
     <style>
-        /* SOLUÇÃO DO TEMA: 
-           Usa variáveis nativas do Streamlit (var(--...)) para que as cores
-           se adaptem automaticamente ao Tema Claro ou Escuro selecionado pelo dispositivo.
-        */
-        
-        /* Forçar o app a usar as cores do tema, prevenindo fundo branco forçado */
         .stApp {
             background-color: var(--primary-background-color);
             color: var(--text-color);
         }
-
-        /* Ajuste de espaçamento do topo */
         .block-container {
             padding-top: 2rem;
             padding-bottom: 3rem;
         }
-
-        /* Remover menu padrão e rodapé para visual de app */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         .stDeployButton {display:none;}
         
-        /* Melhorar visual dos cards (Metrics e Containers) */
         div[data-testid="stMetric"], div[data-testid="stContainer"] {
-            /* Fundo secundário adapta: cinza claro no Light Mode, cinza escuro no Dark Mode */
             background-color: var(--secondary-background-color); 
             padding: 10px;
             border-radius: 10px;
-            /* Borda sutil para destacar do fundo */
             border: 1px solid rgba(128, 128, 128, 0.2);
         }
-
-        /* Ajuste para inputs ficarem legíveis em ambos os modos */
         .stTextInput > div > div > input {
             color: var(--text-color);
         }
@@ -57,25 +42,17 @@ st.markdown("""
 # ==================== FUNÇÃO DE CONEXÃO ====================
 
 def get_db_connection():
-    """
-    Cria e retorna uma nova conexão com o banco de dados PostgreSQL.
-    NÃO usa cache - cria uma nova conexão a cada chamada para garantir estabilidade.
-    """
     try:
-        # Tenta pegar a URL do banco dos secrets do Streamlit
         database_url = st.secrets.get("DATABASE_URL")
         if database_url:
             conn = psycopg2.connect(database_url)
             conn.autocommit = False
             return conn
         else:
-            # Se não encontrar nos secrets, exibe aviso
             st.warning("⚠️ **Configuração de banco de dados não encontrada.**")
-            st.info("Para usar localmente, configure `st.secrets['DATABASE_URL']` ou use um arquivo `.streamlit/secrets.toml`")
             return None
     except Exception as e:
         st.error(f"❌ **Erro ao conectar ao banco de dados:** {str(e)}")
-        st.info("💡 Verifique se a variável `DATABASE_URL` está configurada corretamente nos secrets do Streamlit.")
         return None
 
 # ==================== FUNÇÕES DE BANCO DE DADOS ====================
@@ -83,8 +60,7 @@ def get_db_connection():
 def criar_tabelas():
     """Cria as tabelas do banco de dados se não existirem"""
     conn = get_db_connection()
-    if not conn:
-        return
+    if not conn: return
     
     cursor = None
     try:
@@ -119,27 +95,71 @@ def criar_tabelas():
             )
         """)
         
+        # NOVA TABELA: Histórico de Pontos (para persistência após exclusão da missa)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS historico_pontos (
+                id SERIAL PRIMARY KEY,
+                nome_acolito VARCHAR(255) NOT NULL,
+                data_missa DATE NOT NULL
+            )
+        """)
+        
         conn.commit()
     except psycopg2.Error as e:
         st.error(f"Erro ao criar tabelas: {e}")
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
-def listar_missas_futuras() -> List[Dict]:
-    """Retorna lista de missas futuras ordenadas por data"""
+def arquivar_missas_antigas():
+    """
+    Move inscrições de missas antigas (> 2 semanas) para o histórico 
+    e exclui a missa da tabela ativa.
+    """
     conn = get_db_connection()
-    if not conn:
-        return []
+    if not conn: return
     
     cursor = None
     try:
         cursor = conn.cursor()
         
+        # Data limite: hoje - 14 dias
+        hoje = date.today()
+        data_limite = (hoje - timedelta(days=14)).strftime("%Y-%m-%d")
+        
+        # 1. Identificar missas antigas
+        cursor.execute("SELECT id, data FROM missas WHERE data < %s", (data_limite,))
+        missas_antigas = cursor.fetchall()
+        
+        for m_id, m_data in missas_antigas:
+            # 2. Copiar inscritos para histórico_pontos
+            cursor.execute("""
+                INSERT INTO historico_pontos (nome_acolito, data_missa)
+                SELECT nome_acolito, %s 
+                FROM inscricoes 
+                WHERE missa_id = %s
+            """, (m_data, m_id))
+            
+            # 3. Excluir missa (Cascade apaga inscrições, mas já copiamos para histórico)
+            cursor.execute("DELETE FROM missas WHERE id = %s", (m_id,))
+            
+        conn.commit()
+    except psycopg2.Error as e:
+        # Silencioso no frontend para não assustar usuário, log no console se possível
+        print(f"Erro ao arquivar: {e}") 
+        if conn: conn.rollback()
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+def listar_missas_futuras() -> List[Dict]:
+    conn = get_db_connection()
+    if not conn: return []
+    
+    cursor = None
+    try:
+        cursor = conn.cursor()
         hoje = date.today().strftime("%Y-%m-%d")
         
         cursor.execute("""
@@ -154,440 +174,292 @@ def listar_missas_futuras() -> List[Dict]:
         """, (hoje,))
         
         resultados = cursor.fetchall()
-        
         missas = []
         for row in resultados:
             nomes = row[6] if row[6] else None
             nomes_lista = [nome.strip() for nome in nomes.split(',')] if nomes else []
-            
             missas.append({
-                'id': row[0],
-                'data': row[1],
-                'hora': row[2],
-                'descricao': row[3],
-                'vagas_totais': row[4],
-                'vagas_preenchidas': row[5] or 0,
-                'nomes_inscritos': nomes_lista
+                'id': row[0], 'data': row[1], 'hora': row[2], 'descricao': row[3],
+                'vagas_totais': row[4], 'vagas_preenchidas': row[5] or 0, 'nomes_inscritos': nomes_lista
             })
-        
         return missas
-    except psycopg2.Error as e:
-        st.error(f"Erro ao listar missas: {e}")
-        if conn:
-            conn.rollback()
-        return []
+    except psycopg2.Error: return []
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 def verificar_inscricao(missa_id: int, nome_acolito: str) -> bool:
-    """Verifica se o acólito já está inscrito na missa"""
     conn = get_db_connection()
-    if not conn:
-        return False
-    
+    if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT COUNT(*) FROM inscricoes
-            WHERE missa_id = %s AND nome_acolito = %s
-        """, (missa_id, nome_acolito))
-        
-        resultado = cursor.fetchone()[0] > 0
-        return resultado
-    except psycopg2.Error as e:
-        st.error(f"Erro ao verificar inscrição: {e}")
-        if conn:
-            conn.rollback()
-        return False
+        cursor.execute("SELECT COUNT(*) FROM inscricoes WHERE missa_id = %s AND nome_acolito = %s", (missa_id, nome_acolito))
+        return cursor.fetchone()[0] > 0
+    except psycopg2.Error: return False
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
-    """Inscreve um acólito em uma missa (com verificação de concorrência)"""
     conn = get_db_connection()
-    if not conn:
-        return False
-    
+    if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
+        cursor.execute("SELECT m.vagas_totais, COUNT(i.id) FROM missas m LEFT JOIN inscricoes i ON m.id = i.missa_id WHERE m.id = %s GROUP BY m.id", (missa_id,))
+        res = cursor.fetchone()
+        if not res or res[1] >= res[0]: return False
         
-        # Verificar se ainda há vagas disponíveis
-        cursor.execute("""
-            SELECT m.vagas_totais, COUNT(i.id) as vagas_preenchidas
-            FROM missas m
-            LEFT JOIN inscricoes i ON m.id = i.missa_id
-            WHERE m.id = %s
-            GROUP BY m.id
-        """, (missa_id,))
-        
-        resultado = cursor.fetchone()
-        if not resultado:
-            return False
-        
-        vagas_totais, vagas_preenchidas = resultado
-        
-        if vagas_preenchidas >= vagas_totais:
-            return False
-        
-        # Verificar se já está inscrito (usando o mesmo cursor)
-        cursor.execute("""
-            SELECT COUNT(*) FROM inscricoes
-            WHERE missa_id = %s AND nome_acolito = %s
-        """, (missa_id, nome_acolito))
-        
-        if cursor.fetchone()[0] > 0:
-            return False
-        
-        # Inserir inscrição
-        cursor.execute("""
-            INSERT INTO inscricoes (missa_id, nome_acolito)
-            VALUES (%s, %s)
-        """, (missa_id, nome_acolito))
-        
+        cursor.execute("INSERT INTO inscricoes (missa_id, nome_acolito) VALUES (%s, %s)", (missa_id, nome_acolito))
         conn.commit()
         return True
     except psycopg2.IntegrityError:
-        # Já está inscrito (constraint UNIQUE)
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
         return False
-    except psycopg2.Error as e:
-        st.error(f"Erro ao inscrever acólito: {e}")
-        if conn:
-            conn.rollback()
+    except psycopg2.Error:
+        if conn: conn.rollback()
         return False
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 def desinscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
-    """Remove a inscrição de um acólito"""
     conn = get_db_connection()
-    if not conn:
-        return False
-    
+    if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            DELETE FROM inscricoes
-            WHERE missa_id = %s AND nome_acolito = %s
-        """, (missa_id, nome_acolito))
-        
-        sucesso = cursor.rowcount > 0
+        cursor.execute("DELETE FROM inscricoes WHERE missa_id = %s AND nome_acolito = %s", (missa_id, nome_acolito))
         conn.commit()
-        return sucesso
-    except psycopg2.Error as e:
-        st.error(f"Erro ao desinscrever acólito: {e}")
-        if conn:
-            conn.rollback()
+        return cursor.rowcount > 0
+    except psycopg2.Error:
+        if conn: conn.rollback()
         return False
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int) -> bool:
-    """Cadastra uma nova missa"""
     conn = get_db_connection()
-    if not conn:
-        return False
-    
+    if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT INTO missas (data, hora, descricao, vagas_totais)
-            VALUES (%s, %s, %s, %s)
-        """, (data, hora, descricao, vagas_totais))
-        
+        cursor.execute("INSERT INTO missas (data, hora, descricao, vagas_totais) VALUES (%s, %s, %s, %s)", (data, hora, descricao, vagas_totais))
         conn.commit()
         return True
     except psycopg2.Error as e:
-        st.error(f"Erro ao cadastrar missa: {e}")
-        if conn:
-            conn.rollback()
+        st.error(f"Erro: {e}")
+        if conn: conn.rollback()
         return False
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
-def obter_ranking():
+def obter_ranking_filtrado(periodo: str = 'anual'):
+    """
+    Calcula o ranking consolidando:
+    1. Tabela 'inscricoes' (Missas ativas que já aconteceram +6h)
+    2. Tabela 'historico_pontos' (Missas arquivadas/excluídas)
+    
+    periodo: 'mensal', 'trimestral', 'anual'
+    """
     conn = get_db_connection()
     if not conn: return []
     cur = conn.cursor()
     
-    # Pega quem serviu e quando
+    # 1. Pegar dados ativos (apenas missas passadas)
     cur.execute("""
         SELECT i.nome_acolito, m.data, m.hora 
         FROM inscricoes i JOIN missas m ON i.missa_id = m.id
     """)
-    dados = cur.fetchall()
+    dados_ativos = cur.fetchall()
+    
+    # 2. Pegar dados históricos
+    cur.execute("SELECT nome_acolito, data_missa FROM historico_pontos")
+    dados_historicos = cur.fetchall()
     conn.close()
 
     pontuacao = {}
     fuso = pytz.timezone('America/Sao_Paulo')
     agora = datetime.now(fuso)
+    hoje = date.today()
 
-    for nome, data_str, hora_str in dados:
+    # Processar ativos (validar horário)
+    for nome, data_str, hora_str in dados_ativos:
         try:
-            # Monta data da missa
             dt_str = f"{data_str} {hora_str}"
             dt_missa = fuso.localize(datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
-            
-            # Se já passou 6 horas da missa, ganha ponto
+            # Se já passou 6 horas, conta
             if agora > (dt_missa + timedelta(hours=6)):
-                pontuacao[nome] = pontuacao.get(nome, 0) + 1
+                data_obj = dt_missa.date()
+                aplicar_filtro_e_pontuar(pontuacao, nome, data_obj, periodo, hoje)
         except: continue
 
-    # Ordena do maior para o menor
+    # Processar históricos (já são passados, apenas validar data)
+    for nome, data_obj in dados_historicos:
+        if isinstance(data_obj, str):
+            try: data_obj = datetime.strptime(data_obj, "%Y-%m-%d").date()
+            except: continue
+        aplicar_filtro_e_pontuar(pontuacao, nome, data_obj, periodo, hoje)
+
     return sorted(pontuacao.items(), key=lambda x: x[1], reverse=True)
 
+def aplicar_filtro_e_pontuar(pontuacao_dict, nome, data_missa, periodo, data_ref):
+    """Auxiliar para verificar se a data entra no período solicitado"""
+    # Filtro Anual
+    if data_missa.year != data_ref.year:
+        return
+
+    # Filtro Trimestral
+    if periodo == 'trimestral':
+        trimestre_ref = (data_ref.month - 1) // 3 + 1
+        trimestre_missa = (data_missa.month - 1) // 3 + 1
+        if trimestre_ref != trimestre_missa:
+            return
+            
+    # Filtro Mensal
+    if periodo == 'mensal':
+        if data_missa.month != data_ref.month:
+            return
+
+    # Se passou nos filtros, pontua
+    pontuacao_dict[nome] = pontuacao_dict.get(nome, 0) + 1
+
 def listar_todas_missas() -> List[Dict]:
-    """Retorna todas as missas (para admin)"""
     conn = get_db_connection()
-    if not conn:
-        return []
-    
+    if not conn: return []
     cursor = None
     try:
         cursor = conn.cursor()
-        
         cursor.execute("""
-            SELECT m.id, m.data, m.hora, m.descricao, m.vagas_totais,
-                   COUNT(i.id) as vagas_preenchidas
-            FROM missas m
-            LEFT JOIN inscricoes i ON m.id = i.missa_id
-            GROUP BY m.id
-            ORDER BY m.data DESC, m.hora DESC
+            SELECT m.id, m.data, m.hora, m.descricao, m.vagas_totais, COUNT(i.id)
+            FROM missas m LEFT JOIN inscricoes i ON m.id = i.missa_id
+            GROUP BY m.id ORDER BY m.data DESC, m.hora DESC
         """)
-        
         resultados = cursor.fetchall()
-        
         missas = []
         for row in resultados:
             missas.append({
-                'id': row[0],
-                'data': row[1],
-                'hora': row[2],
-                'descricao': row[3],
-                'vagas_totais': row[4],
-                'vagas_preenchidas': row[5] or 0
+                'id': row[0], 'data': row[1], 'hora': row[2], 'descricao': row[3],
+                'vagas_totais': row[4], 'vagas_preenchidas': row[5] or 0
             })
-        
         return missas
-    except psycopg2.Error as e:
-        st.error(f"Erro ao listar missas: {e}")
-        if conn:
-            conn.rollback()
-        return []
+    except psycopg2.Error: return []
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 def listar_inscritos(missa_id: int) -> List[str]:
-    """Retorna lista de nomes dos acólitos inscritos em uma missa"""
     conn = get_db_connection()
-    if not conn:
-        return []
-    
+    if not conn: return []
     cursor = None
     try:
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT nome_acolito FROM inscricoes
-            WHERE missa_id = %s
-            ORDER BY nome_acolito
-        """, (missa_id,))
-        
-        resultados = cursor.fetchall()
-        
-        return [row[0] for row in resultados]
-    except psycopg2.Error as e:
-        st.error(f"Erro ao listar inscritos: {e}")
-        if conn:
-            conn.rollback()
-        return []
+        cursor.execute("SELECT nome_acolito FROM inscricoes WHERE missa_id = %s ORDER BY nome_acolito", (missa_id,))
+        return [row[0] for row in cursor.fetchall()]
+    except psycopg2.Error: return []
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 def excluir_missa(missa_id: int) -> bool:
-    """Exclui uma missa e suas inscrições"""
+    """
+    Exclui manualmente. Para preservar histórico, 
+    copiamos para historico_pontos antes de excluir.
+    """
     conn = get_db_connection()
-    if not conn:
-        return False
-    
+    if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
         
-        # Primeiro excluir as inscrições (cascade)
+        # Obter data da missa
+        cursor.execute("SELECT data FROM missas WHERE id = %s", (missa_id,))
+        res = cursor.fetchone()
+        if res:
+            data_missa = res[0]
+            # Copiar para histórico
+            cursor.execute("""
+                INSERT INTO historico_pontos (nome_acolito, data_missa)
+                SELECT nome_acolito, %s FROM inscricoes WHERE missa_id = %s
+            """, (data_missa, missa_id))
+            
         cursor.execute("DELETE FROM inscricoes WHERE missa_id = %s", (missa_id,))
-        
-        # Depois excluir a missa
         cursor.execute("DELETE FROM missas WHERE id = %s", (missa_id,))
-        
         conn.commit()
         return True
     except psycopg2.Error as e:
-        st.error(f"Erro ao excluir missa: {e}")
-        if conn:
-            conn.rollback()
+        st.error(f"Erro: {e}")
+        if conn: conn.rollback()
         return False
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 def remover_inscricao_admin(missa_id: int, nome_acolito: str) -> bool:
-    """Remove a inscrição de um acólito específico (função para admin)"""
     conn = get_db_connection()
-    if not conn:
-        return False
-    
+    if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            DELETE FROM inscricoes
-            WHERE missa_id = %s AND nome_acolito = %s
-        """, (missa_id, nome_acolito))
-        
-        sucesso = cursor.rowcount > 0
+        cursor.execute("DELETE FROM inscricoes WHERE missa_id = %s AND nome_acolito = %s", (missa_id, nome_acolito))
         conn.commit()
-        return sucesso
-    except psycopg2.Error as e:
-        st.error(f"Erro ao remover inscrição: {e}")
-        if conn:
-            conn.rollback()
+        return cursor.rowcount > 0
+    except psycopg2.Error:
+        if conn: conn.rollback()
         return False
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 def listar_acolitos() -> List[str]:
-    """Retorna lista de todos os acólitos cadastrados"""
     conn = get_db_connection()
-    if not conn:
-        return []
-    
+    if not conn: return []
     cursor = None
     try:
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT nome FROM acolitos
-            ORDER BY nome
-        """)
-        
-        resultados = cursor.fetchall()
-        
-        return [row[0] for row in resultados]
-    except psycopg2.Error as e:
-        st.error(f"Erro ao listar acólitos: {e}")
-        if conn:
-            conn.rollback()
-        return []
+        cursor.execute("SELECT nome FROM acolitos ORDER BY nome")
+        return [row[0] for row in cursor.fetchall()]
+    except psycopg2.Error: return []
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 def cadastrar_acolito(nome: str) -> bool:
-    """Cadastra um novo acólito"""
     conn = get_db_connection()
-    if not conn:
-        return False
-    
+    if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT INTO acolitos (nome)
-            VALUES (%s)
-        """, (nome.strip(),))
-        
+        cursor.execute("INSERT INTO acolitos (nome) VALUES (%s)", (nome.strip(),))
         conn.commit()
         return True
-    except psycopg2.IntegrityError:
-        # Acólito já existe
-        return False
-    except psycopg2.Error as e:
-        st.error(f"Erro ao cadastrar acólito: {e}")
-        if conn:
-            conn.rollback()
-        return False
+    except psycopg2.IntegrityError: return False
+    except psycopg2.Error: return False
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 def remover_acolito(nome: str) -> bool:
-    """Remove um acólito da lista"""
     conn = get_db_connection()
-    if not conn:
-        return False
-    
+    if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            DELETE FROM acolitos
-            WHERE nome = %s
-        """, (nome,))
-        
-        sucesso = cursor.rowcount > 0
+        cursor.execute("DELETE FROM acolitos WHERE nome = %s", (nome,))
         conn.commit()
-        return sucesso
-    except psycopg2.Error as e:
-        st.error(f"Erro ao remover acólito: {e}")
-        if conn:
-            conn.rollback()
-        return False
+        return cursor.rowcount > 0
+    except psycopg2.Error: return False
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 # ==================== FUNÇÕES DE INTERFACE ====================
 
 def tela_login():
-    """Renderiza a tela de login"""
-    
-    # Layout centralizado
     col_vazia_esq, col_centro, col_vazia_dir = st.columns([1, 1.5, 1])
-    
     with col_centro:
         with st.container(border=True):
             st.markdown("<h1 style='text-align: center;'>⛪️</h1>", unsafe_allow_html=True)
@@ -596,46 +468,34 @@ def tela_login():
             st.divider()
             
             st.markdown("##### 👤 Acesso do Acólito")
-            # Buscar lista de acólitos cadastrados
             acolitos = listar_acolitos()
             
             if not acolitos:
-                st.warning("⚠️ Nenhum acólito cadastrado. Solicite ao coordenador.")
+                st.warning("⚠️ Nenhum acólito cadastrado.")
                 nome_selecionado = None
             else:
-                nome_selecionado = st.selectbox(
-                    "Selecione seu nome",
-                    options=[""] + acolitos,
-                    key="select_nome",
-                    index=0,
-                    placeholder="Clique para buscar seu nome"
-                )
+                nome_selecionado = st.selectbox("Selecione seu nome", options=[""] + acolitos, key="select_nome")
             
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
-                if st.button("Entrar no Sistema", type="primary", use_container_width=True):
+                if st.button("Entrar", type="primary", use_container_width=True):
                     if nome_selecionado and nome_selecionado.strip():
                         st.session_state['usuario'] = nome_selecionado.strip()
                         st.session_state['tela'] = 'escala'
                         st.rerun()
                     else:
-                        st.toast("⚠️ Por favor, selecione seu nome para continuar.")
-            
+                        st.toast("Selecione seu nome.")
             with col_btn2:
-                if st.button("Sair / Logout", use_container_width=True):
-                    if 'usuario' in st.session_state:
-                        del st.session_state['usuario']
-                    if 'tela' in st.session_state:
-                        del st.session_state['tela']
+                if st.button("Sair", use_container_width=True):
+                    if 'usuario' in st.session_state: del st.session_state['usuario']
                     st.rerun()
             
             st.divider()
-            
             with st.expander("🔐 Área do Coordenador"):
                 is_coordenador = st.checkbox("Confirmar acesso administrativo")
                 if is_coordenador:
-                    senha = st.text_input("Senha de acesso", type="password", key="input_senha")
-                    if st.button("Acessar Painel", type="secondary", use_container_width=True):
+                    senha = st.text_input("Senha", type="password")
+                    if st.button("Acessar", type="secondary", use_container_width=True):
                         if senha == st.secrets["ADMIN_SENHA"]:
                             st.session_state['tela'] = 'admin'
                             st.rerun()
@@ -643,34 +503,29 @@ def tela_login():
                             st.error("Senha incorreta!")
 
 def tela_escala():
-    """Renderiza a tela de escala para acólitos"""
     nome = st.session_state.get('usuario', 'Usuário')
-    
-    # Header personalizado com colunas
     col_header, col_sair = st.columns([5, 1])
     with col_header:
         st.title(f"Olá, {nome}!")
-        st.caption(f"Bem-vindo(a) ao painel de escalas. Hoje é {date.today().strftime('%d/%m/%Y')}.")
+        st.caption(f"Hoje é {date.today().strftime('%d/%m/%Y')}.")
     with col_sair:
-        st.write("") # Espaço
+        st.write("")
         if st.button("Sair", use_container_width=True):
             if 'usuario' in st.session_state: del st.session_state['usuario']
-            if 'tela' in st.session_state: del st.session_state['tela']
+            st.session_state['tela'] = 'login'
             st.rerun()
     
     st.divider()
-    
-    tab_missas, tab_ranking = st.tabs(["📅 Próximas Missas", "🏆 Ranking Geral"])
+    tab_missas, tab_ranking = st.tabs(["📅 Próximas Missas", "🏆 Ranking Mês Atual"])
 
     with tab_missas:
         st.subheader("Missas Disponíveis")
         missas = listar_missas_futuras()
-        
         if not missas:
-            st.info("📭 Nenhuma missa agendada no momento. Aproveite o descanso!")
+            st.info("📭 Nenhuma missa agendada.")
         else:
-            # Grid system para telas grandes
             for missa in missas:
+                # Ocultar missas já iniciadas há mais de 6h
                 try:
                     fuso = pytz.timezone('America/Sao_Paulo')
                     agora = datetime.now(fuso)
@@ -680,259 +535,175 @@ def tela_escala():
                 except: pass
                 
                 with st.container(border=True):
-                    # Formatação de data
                     try:
-                        data_obj = datetime.strptime(missa['data'], "%Y-%m-%d")
-                        dia_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][data_obj.weekday()]
-                        data_formatada = data_obj.strftime("%d/%m")
-                    except:
-                        data_formatada = missa['data']
-                        dia_semana = ""
+                        d_obj = datetime.strptime(missa['data'], "%Y-%m-%d")
+                        d_fmt = d_obj.strftime("%d/%m")
+                        dia = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][d_obj.weekday()]
+                    except: d_fmt, dia = missa['data'], ""
 
-                    # Layout do Card
                     c_info, c_action = st.columns([3, 1.5])
-                    
                     with c_info:
                         st.markdown(f"#### {missa['descricao'] or 'Santa Missa'}")
-                        st.markdown(f"🗓️ **{dia_semana}, {data_formatada}** às **{missa['hora']}**")
-                        
-                        nomes_inscritos = missa.get('nomes_inscritos', [])
-                        if nomes_inscritos:
-                            nomes_formatados = ", ".join(nomes_inscritos)
-                            st.info(f"**Escalados:** {nomes_formatados}")
-                        else:
-                            st.caption("Ainda sem inscritos.")
-                            
-                        # Barra de progresso visual
-                        vagas_preenchidas = missa['vagas_preenchidas']
-                        vagas_totais = missa['vagas_totais']
-                        progresso = vagas_preenchidas / vagas_totais if vagas_totais > 0 else 0
-                        st.progress(progresso)
-                        st.caption(f"Vagas: {vagas_preenchidas} de {vagas_totais} preenchidas")
+                        st.markdown(f"🗓️ **{dia}, {d_fmt}** às **{missa['hora']}**")
+                        if missa['nomes_inscritos']:
+                            st.info(f"**Escalados:** {', '.join(missa['nomes_inscritos'])}")
+                        else: st.caption("Sem inscritos.")
+                        st.progress(missa['vagas_preenchidas'] / missa['vagas_totais'] if missa['vagas_totais'] > 0 else 0)
+                        st.caption(f"{missa['vagas_preenchidas']}/{missa['vagas_totais']} vagas")
 
                     with c_action:
-                        st.write("") # Espaçamento vertical
+                        st.write("")
                         esta_inscrito = verificar_inscricao(missa['id'], nome)
-                        tem_vaga = vagas_preenchidas < vagas_totais
-                        
                         if esta_inscrito:
-                            if st.button("❌ Sair", key=f"sair_{missa['id']}", 
-                                         use_container_width=True, type="secondary", 
-                                         help="Cancelar sua participação nesta missa"):
-                                if desinscrever_acolito(missa['id'], nome):
-                                    st.success("Removido!")
-                                    st.rerun()
-                                else:
-                                    st.error("Erro ao sair.")
-                        elif tem_vaga:
-                            if st.button("✅ Servir", key=f"servir_{missa['id']}", 
-                                         use_container_width=True, type="primary",
-                                         help="Confirmar presença nesta missa"):
-                                if inscrever_acolito(missa['id'], nome):
-                                    st.canvas_event = True # Hack visual
-                                    st.success("Confirmado!")
-                                    st.rerun()
-                                else:
-                                    st.error("Erro: Vaga ocupada.")
+                            if st.button("❌ Sair", key=f"s_{missa['id']}", type="secondary", use_container_width=True):
+                                desinscrever_acolito(missa['id'], nome)
+                                st.rerun()
+                        elif missa['vagas_preenchidas'] < missa['vagas_totais']:
+                            if st.button("✅ Servir", key=f"e_{missa['id']}", type="primary", use_container_width=True):
+                                inscrever_acolito(missa['id'], nome)
+                                st.rerun()
                         else:
-                            st.button("🔒 Lotado", key=f"lotado_{missa['id']}", 
-                                      use_container_width=True, disabled=True)
+                            st.button("🔒 Lotado", key=f"l_{missa['id']}", disabled=True, use_container_width=True)
 
     with tab_ranking:
-        st.subheader("Quadro de Honra")
-        st.caption("Pontuação baseada em missas servidas.")
-        ranking = obter_ranking()
-        
+        # ACOLITOS VÊEM APENAS O MENSAL
+        st.subheader(f"Ranking de {date.today().strftime('%B').capitalize()}")
+        ranking = obter_ranking_filtrado('mensal')
         if ranking:
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                # Destaque para o Top 3
-                top3 = ranking[:3]
-                for i, (nome_r, pontos) in enumerate(top3, 1):
-                    emoji = "🥇" if i==1 else "🥈" if i==2 else "🥉"
-                    st.metric(label=f"{emoji} {i}º Lugar", value=str(pontos), delta=nome_r)
-            
-            with col2:
-                # Tabela completa
-                st.markdown("**Classificação Completa**")
-                for i, (nome_r, pontos) in enumerate(ranking, 1):
-                    with st.container(border=True):
-                        cl1, cl2 = st.columns([4, 1])
-                        cl1.markdown(f"**{i}º** {nome_r}")
-                        cl2.markdown(f"**{pontos}** pts")
+            for i, (nome_r, pontos) in enumerate(ranking, 1):
+                st.write(f"**{i}º** {nome_r} - {pontos} pts")
         else:
-            st.info("O ranking será atualizado após a realização das primeiras missas.")
+            st.info("Nenhuma pontuação neste mês ainda.")
+
+def render_ranking_table(dados, titulo):
+    st.markdown(f"### {titulo}")
+    if dados:
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            top3 = dados[:3]
+            for i, (n, p) in enumerate(top3, 1):
+                em = "🥇" if i==1 else "🥈" if i==2 else "🥉"
+                st.metric(f"{em} {i}º", str(p), n)
+        with col2:
+            st.dataframe(
+                [{"Pos": f"{i}º", "Acólito": n, "Pontos": p} for i, (n, p) in enumerate(dados, 1)],
+                hide_index=True, use_container_width=True
+            )
+    else:
+        st.info("Sem dados para este período.")
 
 def tela_admin():
-    """Renderiza a tela de administração"""
     st.title("⚙️ Painel do Coordenador")
-    st.markdown("Gerencie missas, equipe e pontuações.")
-    
-    if st.button("← Sair do Painel Admin"):
-        if 'tela' in st.session_state: del st.session_state['tela']
+    if st.button("← Sair"):
+        st.session_state['tela'] = 'login'
         st.rerun()
-    
     st.divider()
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 Agenda", "👥 Equipe", "🏆 Ranking", "📜 Histórico"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Agenda", "👥 Equipe", "🏆 Rankings", "📜 Histórico"])
     
-    # --- ABA 1: MISSAS FUTURAS ---
-    with tab1:
-        col_form, col_lista = st.columns([1, 2])
-        
-        with col_form:
+    with tab1: # AGENDA
+        c_form, c_lista = st.columns([1, 2])
+        with c_form:
             with st.container(border=True):
                 st.subheader("➕ Nova Missa")
-                with st.form("form_nova_missa", border=False):
-                    data = st.date_input("Data", min_value=date.today())
-                    hora = st.time_input("Hora", value=time(19, 0))
-                    descricao = st.text_input("Descrição", placeholder="Ex: Missa Solene")
-                    vagas_totais = st.number_input("Vagas", 1, 20, 4)
-                    
-                    if st.form_submit_button("Cadastrar Missa", type="primary", use_container_width=True):
-                        if cadastrar_missa(data.strftime("%Y-%m-%d"), hora.strftime("%H:%M"), descricao, vagas_totais):
-                            st.toast("Missa criada com sucesso!")
-                            st.rerun()
-        
-        with col_lista:
-            st.subheader("Gerenciar Agendamentos")
+                with st.form("new_mass"):
+                    dt = st.date_input("Data", min_value=date.today())
+                    hr = st.time_input("Hora", value=time(19, 0))
+                    desc = st.text_input("Descrição")
+                    vagas = st.number_input("Vagas", 1, 20, 4)
+                    if st.form_submit_button("Criar", type="primary"):
+                        cadastrar_missa(dt.strftime("%Y-%m-%d"), hr.strftime("%H:%M"), desc, vagas)
+                        st.rerun()
+        with c_lista:
+            st.subheader("Missas Ativas")
             missas = listar_todas_missas()
-            if not missas: st.info("Nenhuma missa cadastrada.")
-            
-            for missa in missas:
-                # FILTRO: Só mostra missas que AINDA VÃO ACONTECER (ou recentes)
+            for m in missas:
+                # Filtro visual de missas passadas (mas ainda no DB)
                 try:
                     fuso = pytz.timezone('America/Sao_Paulo')
                     agora = datetime.now(fuso)
-                    dt_missa = fuso.localize(datetime.strptime(f"{missa['data']} {missa['hora']}", "%Y-%m-%d %H:%M"))
-                    if agora > (dt_missa + timedelta(hours=6)): continue 
+                    dt_missa = fuso.localize(datetime.strptime(f"{m['data']} {m['hora']}", "%Y-%m-%d %H:%M"))
+                    if agora > (dt_missa + timedelta(hours=6)): continue
                 except: pass
 
-                with st.expander(f"📿 {missa['data']} - {missa['descricao'] or 'Missa'} ({missa['hora']})", expanded=False):
-                    c1, c2 = st.columns([3, 1])
-                    with c1:
-                        st.write(f"**Lotação:** {missa['vagas_preenchidas']}/{missa['vagas_totais']}")
-                        inscritos = listar_inscritos(missa['id'])
-                        if inscritos:
-                            st.markdown("---")
-                            for u in inscritos:
-                                cx, cy = st.columns([4, 1])
-                                cx.text(f"• {u}")
-                                if cy.button("❌", key=f"rm_{missa['id']}_{u}", help="Remover inscrito"):
-                                    remover_inscricao_admin(missa['id'], u)
-                                    st.rerun()
-                        else:
-                            st.caption("Sem inscritos.")
-                    
-                    with c2:
-                        st.write("")
-                        if st.button("🗑️ Excluir", key=f"del_{missa['id']}", type="primary", use_container_width=True):
-                            excluir_missa(missa['id'])
-                            st.rerun()
-
-    # --- ABA 2: EQUIPE ---
-    with tab2:
-        col_add, col_view = st.columns([1, 2])
-        with col_add:
-            with st.container(border=True):
-                st.subheader("Novo Acólito")
-                with st.form("add_ac", border=False):
-                    nome = st.text_input("Nome completo")
-                    if st.form_submit_button("Adicionar", type="primary", use_container_width=True):
-                        if cadastrar_acolito(nome): 
-                            st.toast("Acólito cadastrado!")
-                            st.rerun()
-        
-        with col_view:
-            st.subheader("Acólitos Ativos")
-            for ac in listar_acolitos():
-                with st.container(border=True):
-                    c1, c2 = st.columns([4,1])
-                    c1.write(f"👤 {ac}")
-                    if c2.button("🗑️", key=f"del_ac_{ac}", help="Remover acólito"):
-                        remover_acolito(ac)
+                with st.expander(f"{m['data']} - {m['descricao']} ({m['vagas_preenchidas']}/{m['vagas_totais']})"):
+                    inscritos = listar_inscritos(m['id'])
+                    if inscritos:
+                        for u in inscritos:
+                            c1, c2 = st.columns([4, 1])
+                            c1.text(f"• {u}")
+                            if c2.button("❌", key=f"rm_{m['id']}_{u}"):
+                                remover_inscricao_admin(m['id'], u)
+                                st.rerun()
+                    else: st.caption("Vazio")
+                    if st.button("🗑️ Excluir Missa", key=f"del_{m['id']}", type="primary"):
+                        excluir_missa(m['id'])
                         st.rerun()
 
-    # --- ABA 3: RANKING ---
-    with tab3:
-        st.subheader("Ranking Geral")
-        r = obter_ranking()
-        if r: 
-            st.table([{"Posição": f"{i}º", "Nome": n, "Missas Servidas": p} for i, (n,p) in enumerate(r,1)])
-        else: 
-            st.info("Sem dados de pontuação.")
+    with tab2: # EQUIPE
+        c_add, c_view = st.columns([1, 2])
+        with c_add:
+            with st.form("add_ac"):
+                nm = st.text_input("Nome")
+                if st.form_submit_button("Adicionar"):
+                    cadastrar_acolito(nm)
+                    st.rerun()
+        with c_view:
+            for ac in listar_acolitos():
+                c1, c2 = st.columns([4,1])
+                c1.write(f"👤 {ac}")
+                if c2.button("🗑️", key=f"d_ac_{ac}"):
+                    remover_acolito(ac)
+                    st.rerun()
 
-    # --- ABA 4: HISTÓRICO ---
-    with tab4:
-        st.subheader("📜 Histórico e Correção")
-        st.caption("Missas finalizadas (+6h). Use para corrigir presenças e pontuações.")
+    with tab3: # RANKINGS (Coordenador vê tudo)
+        st.subheader("Painel de Pontuação")
+        rt1, rt2, rt3 = st.tabs(["📅 Mensal", "📊 Trimestral", "📆 Anual"])
         
+        with rt1:
+            render_ranking_table(obter_ranking_filtrado('mensal'), "Mês Atual")
+        with rt2:
+            render_ranking_table(obter_ranking_filtrado('trimestral'), "Trimestre Atual")
+        with rt3:
+            render_ranking_table(obter_ranking_filtrado('anual'), "Ano Atual")
+
+    with tab4: # HISTORICO (Correção manual)
+        st.info("Missas finalizadas (+6h) que ainda não foram arquivadas.")
         missas = listar_todas_missas()
-        lista_completa_acolitos = listar_acolitos()
-        encontrou_antiga = False
-        
-        for missa in missas:
+        for m in missas:
             mostrar = False
             try:
                 fuso = pytz.timezone('America/Sao_Paulo')
                 agora = datetime.now(fuso)
-                dt_missa = fuso.localize(datetime.strptime(f"{missa['data']} {missa['hora']}", "%Y-%m-%d %H:%M"))
-                if agora > (dt_missa + timedelta(hours=6)): 
-                    mostrar = True
-                    encontrou_antiga = True
+                dt_missa = fuso.localize(datetime.strptime(f"{m['data']} {m['hora']}", "%Y-%m-%d %H:%M"))
+                if agora > (dt_missa + timedelta(hours=6)): mostrar = True
             except: pass
             
             if mostrar:
-                with st.expander(f"✅ REALIZADA: {missa['data']} - {missa['descricao']} ({missa['hora']})"):
-                    col_lista, col_add = st.columns([1, 1])
-                    
-                    with col_lista:
-                        st.markdown("**Quem serviu (Pontuou):**")
-                        inscritos = listar_inscritos(missa['id'])
-                        if inscritos:
-                            for u in inscritos:
-                                c_nome, c_del = st.columns([3, 1])
-                                c_nome.text(f"• {u}")
-                                if c_del.button("Retirar", key=f"hist_rm_{missa['id']}_{u}", help="Remove pontuação"):
-                                    remover_inscricao_admin(missa['id'], u)
-                                    st.rerun()
-                        else:
-                            st.caption("Nenhum registro.")
-                    
-                    with col_add:
-                        st.markdown("**Adicionar (Dar Ponto):**")
-                        quem_add = st.selectbox("Acólito:", [""] + lista_completa_acolitos, key=f"sel_add_{missa['id']}")
-                        
-                        if st.button("Adicionar Manualmente", key=f"btn_add_{missa['id']}", use_container_width=True):
-                            if quem_add:
-                                if inscrever_acolito(missa['id'], quem_add):
-                                    st.success(f"Ponto +1 para {quem_add}!")
-                                    st.rerun()
-                                else:
-                                    st.error("Erro: Lotado ou já inscrito.")
-                            else:
-                                st.warning("Selecione um nome.")
-                        
-        if not encontrou_antiga:
-            st.info("Nenhuma missa passada para exibir.")
+                with st.expander(f"✅ {m['data']} - {m['descricao']}"):
+                    insc = listar_inscritos(m['id'])
+                    st.write(f"Pontuaram: {', '.join(insc) if insc else 'Ninguém'}")
+                    acolito_add = st.selectbox("Adicionar manual:", [""] + listar_acolitos(), key=f"sa_{m['id']}")
+                    if st.button("Adicionar Ponto", key=f"ba_{m['id']}"):
+                        if acolito_add: 
+                            inscrever_acolito(m['id'], acolito_add)
+                            st.rerun()
 
-# ==================== LÓGICA PRINCIPAL ====================
+# ==================== MAIN ====================
 
 def main():
-    # Inicializar banco de dados
     criar_tabelas()
     
-    # Inicializar estado da sessão
+    # Rotina automática: arquivar missas > 2 semanas
+    # Isso limpa a visualização mas mantém os pontos nos rankings
+    arquivar_missas_antigas()
+    
     if 'tela' not in st.session_state:
         st.session_state['tela'] = 'login'
     
-    # Navegação entre telas
-    if st.session_state['tela'] == 'login':
-        tela_login()
-    elif st.session_state['tela'] == 'escala':
-        tela_escala()
-    elif st.session_state['tela'] == 'admin':
-        tela_admin()
+    if st.session_state['tela'] == 'login': tela_login()
+    elif st.session_state['tela'] == 'escala': tela_escala()
+    elif st.session_state['tela'] == 'admin': tela_admin()
 
 if __name__ == "__main__":
     main()
