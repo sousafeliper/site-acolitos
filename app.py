@@ -221,15 +221,16 @@ def verificar_inscricao(missa_id: int, nome_acolito: str) -> bool:
         if cursor: cursor.close()
         if conn: conn.close()
 
-def inscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
+def inscrever_acolito(missa_id: int, nome_acolito: str, ignorar_vagas: bool = False) -> bool:
     conn = get_db_connection()
     if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT m.vagas_totais, COUNT(i.id) FROM missas m LEFT JOIN inscricoes i ON m.id = i.missa_id WHERE m.id = %s GROUP BY m.id", (missa_id,))
-        res = cursor.fetchone()
-        if not res or res[1] >= res[0]: return False
+        if not ignorar_vagas:
+            cursor.execute("SELECT m.vagas_totais, COUNT(i.id) FROM missas m LEFT JOIN inscricoes i ON m.id = i.missa_id WHERE m.id = %s GROUP BY m.id", (missa_id,))
+            res = cursor.fetchone()
+            if not res or res[1] >= res[0]: return False
         
         cursor.execute("INSERT INTO inscricoes (missa_id, nome_acolito) VALUES (%s, %s)", (missa_id, nome_acolito))
         conn.commit()
@@ -271,6 +272,26 @@ def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int) -> 
         return True
     except psycopg2.Error as e:
         st.error(f"Erro: {e}")
+        if conn: conn.rollback()
+        return False
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+def atualizar_missa(missa_id: int, data: str, hora: str, descricao: str, vagas_totais: int) -> bool:
+    conn = get_db_connection()
+    if not conn: return False
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE missas 
+            SET data = %s, hora = %s, descricao = %s, vagas_totais = %s
+            WHERE id = %s
+        """, (data, hora, descricao, vagas_totais, missa_id))
+        conn.commit()
+        return True
+    except psycopg2.Error as e:
         if conn: conn.rollback()
         return False
     finally:
@@ -638,6 +659,32 @@ def fragment_agenda():
             except: pass
 
             with st.expander(f"{m['data']} - {m['descricao']} ({m['vagas_preenchidas']}/{m['vagas_totais']})"):
+                
+                with st.form(f"edit_mass_{m['id']}"):
+                    st.write("✏️ **Editar Dados da Missa**")
+                    
+                    try:
+                        m_dt = datetime.strptime(m['data'], "%Y-%m-%d").date()
+                    except:
+                        m_dt = date.today()
+                        
+                    try:
+                        m_hr = datetime.strptime(m['hora'], "%H:%M").time()
+                    except:
+                        m_hr = time(19, 0)
+                        
+                    c_d, c_h = st.columns(2)
+                    new_dt = c_d.date_input("Data", value=m_dt, key=f"d_{m['id']}")
+                    new_hr = c_h.time_input("Hora", value=m_hr, key=f"h_{m['id']}")
+                    new_desc = st.text_input("Descrição", value=m['descricao'], key=f"desc_{m['id']}")
+                    new_vagas = st.number_input("Vagas Totais", 1, 50, value=m['vagas_totais'], key=f"v_{m['id']}")
+                    
+                    if st.form_submit_button("Salvar Alterações"):
+                        atualizar_missa(m['id'], new_dt.strftime("%Y-%m-%d"), new_hr.strftime("%H:%M"), new_desc, new_vagas)
+                        st.rerun(scope="fragment")
+                
+                st.divider()
+                st.write("👥 **Inscritos**")
                 inscritos = listar_inscritos(m['id'])
                 if inscritos:
                     for u in inscritos:
@@ -647,6 +694,8 @@ def fragment_agenda():
                             remover_inscricao_admin(m['id'], u)
                             st.rerun(scope="fragment")
                 else: st.caption("Vazio")
+                
+                st.divider()
                 if st.button("🗑️ Excluir Missa", key=f"del_{m['id']}", type="primary"):
                     excluir_missa(m['id'])
                     st.rerun(scope="fragment")
@@ -668,10 +717,10 @@ def fragment_historico():
             with st.expander(f"✅ {m['data']} - {m['descricao']}"):
                 insc = listar_inscritos(m['id'])
                 st.write(f"Pontuaram: {', '.join(insc) if insc else 'Ninguém'}")
-                acolito_add = st.selectbox("Adicionar manual:", [""] + listar_acolitos(), key=f"sa_{m['id']}")
+                acolito_add = st.selectbox("Adicionar manual (Excede vagas):", [""] + listar_acolitos(), key=f"sa_{m['id']}")
                 if st.button("Adicionar Ponto", key=f"ba_{m['id']}"):
                     if acolito_add: 
-                        inscrever_acolito(m['id'], acolito_add)
+                        inscrever_acolito(m['id'], acolito_add, ignorar_vagas=True)
                         st.rerun(scope="fragment")
 
 def tela_admin():
