@@ -612,6 +612,68 @@ def render_ranking_table(dados, titulo):
     else:
         st.info("Sem dados para este período.")
 
+@st.fragment
+def fragment_agenda():
+    c_form, c_lista = st.columns([1, 2])
+    with c_form:
+        with st.container(border=True):
+            st.subheader("➕ Nova Missa")
+            with st.form("new_mass", clear_on_submit=True):
+                dt = st.date_input("Data", min_value=date.today())
+                hr = st.time_input("Hora", value=time(19, 0))
+                desc = st.text_input("Descrição")
+                vagas = st.number_input("Vagas", 1, 20, 4)
+                if st.form_submit_button("Criar", type="primary"):
+                    cadastrar_missa(dt.strftime("%Y-%m-%d"), hr.strftime("%H:%M"), desc, vagas)
+                    st.rerun(scope="fragment")
+    with c_lista:
+        st.subheader("Missas Ativas")
+        missas = listar_todas_missas()
+        for m in missas:
+            try:
+                fuso = pytz.timezone('America/Sao_Paulo')
+                agora = datetime.now(fuso)
+                dt_missa = fuso.localize(datetime.strptime(f"{m['data']} {m['hora']}", "%Y-%m-%d %H:%M"))
+                if agora > (dt_missa + timedelta(hours=6)): continue
+            except: pass
+
+            with st.expander(f"{m['data']} - {m['descricao']} ({m['vagas_preenchidas']}/{m['vagas_totais']})"):
+                inscritos = listar_inscritos(m['id'])
+                if inscritos:
+                    for u in inscritos:
+                        c1, c2 = st.columns([4, 1])
+                        c1.text(f"• {u}")
+                        if c2.button("❌", key=f"rm_{m['id']}_{u}"):
+                            remover_inscricao_admin(m['id'], u)
+                            st.rerun(scope="fragment")
+                else: st.caption("Vazio")
+                if st.button("🗑️ Excluir Missa", key=f"del_{m['id']}", type="primary"):
+                    excluir_missa(m['id'])
+                    st.rerun(scope="fragment")
+
+@st.fragment
+def fragment_historico():
+    st.info("Missas finalizadas (+6h) que ainda não foram arquivadas.")
+    missas = listar_todas_missas()
+    for m in missas:
+        mostrar = False
+        try:
+            fuso = pytz.timezone('America/Sao_Paulo')
+            agora = datetime.now(fuso)
+            dt_missa = fuso.localize(datetime.strptime(f"{m['data']} {m['hora']}", "%Y-%m-%d %H:%M"))
+            if agora > (dt_missa + timedelta(hours=6)): mostrar = True
+        except: pass
+        
+        if mostrar:
+            with st.expander(f"✅ {m['data']} - {m['descricao']}"):
+                insc = listar_inscritos(m['id'])
+                st.write(f"Pontuaram: {', '.join(insc) if insc else 'Ninguém'}")
+                acolito_add = st.selectbox("Adicionar manual:", [""] + listar_acolitos(), key=f"sa_{m['id']}")
+                if st.button("Adicionar Ponto", key=f"ba_{m['id']}"):
+                    if acolito_add: 
+                        inscrever_acolito(m['id'], acolito_add)
+                        st.rerun(scope="fragment")
+
 def tela_admin():
     st.title("⚙️ Painel do Coordenador")
     if st.button("← Sair"):
@@ -622,42 +684,7 @@ def tela_admin():
     tab1, tab2, tab3, tab4 = st.tabs(["📋 Agenda", "👥 Equipe", "🏆 Rankings", "📜 Histórico"])
     
     with tab1: # AGENDA
-        c_form, c_lista = st.columns([1, 2])
-        with c_form:
-            with st.container(border=True):
-                st.subheader("➕ Nova Missa")
-                with st.form("new_mass"):
-                    dt = st.date_input("Data", min_value=date.today())
-                    hr = st.time_input("Hora", value=time(19, 0))
-                    desc = st.text_input("Descrição")
-                    vagas = st.number_input("Vagas", 1, 20, 4)
-                    if st.form_submit_button("Criar", type="primary"):
-                        cadastrar_missa(dt.strftime("%Y-%m-%d"), hr.strftime("%H:%M"), desc, vagas)
-                        st.rerun()
-        with c_lista:
-            st.subheader("Missas Ativas")
-            missas = listar_todas_missas()
-            for m in missas:
-                try:
-                    fuso = pytz.timezone('America/Sao_Paulo')
-                    agora = datetime.now(fuso)
-                    dt_missa = fuso.localize(datetime.strptime(f"{m['data']} {m['hora']}", "%Y-%m-%d %H:%M"))
-                    if agora > (dt_missa + timedelta(hours=6)): continue
-                except: pass
-
-                with st.expander(f"{m['data']} - {m['descricao']} ({m['vagas_preenchidas']}/{m['vagas_totais']})"):
-                    inscritos = listar_inscritos(m['id'])
-                    if inscritos:
-                        for u in inscritos:
-                            c1, c2 = st.columns([4, 1])
-                            c1.text(f"• {u}")
-                            if c2.button("❌", key=f"rm_{m['id']}_{u}"):
-                                remover_inscricao_admin(m['id'], u)
-                                st.rerun()
-                    else: st.caption("Vazio")
-                    if st.button("🗑️ Excluir Missa", key=f"del_{m['id']}", type="primary"):
-                        excluir_missa(m['id'])
-                        st.rerun()
+        fragment_agenda()
 
     with tab2: # EQUIPE
         c_add, c_view = st.columns([1, 2])
@@ -704,26 +731,7 @@ def tela_admin():
             render_ranking_table(obter_ranking_filtrado('anual', data_referencia), f"Ranking: Ano {sel_ano}")
 
     with tab4: # HISTORICO
-        st.info("Missas finalizadas (+6h) que ainda não foram arquivadas.")
-        missas = listar_todas_missas()
-        for m in missas:
-            mostrar = False
-            try:
-                fuso = pytz.timezone('America/Sao_Paulo')
-                agora = datetime.now(fuso)
-                dt_missa = fuso.localize(datetime.strptime(f"{m['data']} {m['hora']}", "%Y-%m-%d %H:%M"))
-                if agora > (dt_missa + timedelta(hours=6)): mostrar = True
-            except: pass
-            
-            if mostrar:
-                with st.expander(f"✅ {m['data']} - {m['descricao']}"):
-                    insc = listar_inscritos(m['id'])
-                    st.write(f"Pontuaram: {', '.join(insc) if insc else 'Ninguém'}")
-                    acolito_add = st.selectbox("Adicionar manual:", [""] + listar_acolitos(), key=f"sa_{m['id']}")
-                    if st.button("Adicionar Ponto", key=f"ba_{m['id']}"):
-                        if acolito_add: 
-                            inscrever_acolito(m['id'], acolito_add)
-                            st.rerun()
+        fragment_historico()
 
 # ==================== MAIN ====================
 
