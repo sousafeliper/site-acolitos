@@ -1,35 +1,35 @@
 # ⛪ Pastoral de Acólitos | Sistema de Gestão e Organização
 
-Este projeto nasceu da necessidade de modernizar e centralizar a organização da **Pastoral de Acólitos**, servindo como uma ferramenta facilitadora para a escala de serviços, comunicação interna e partilha de materiais de formação.
+Este projeto foi desenvolvido com o propósito de modernizar e centralizar a gestão da **Pastoral de Acólitos**, servindo como uma ferramenta administrativa essencial para a coordenação. O sistema automatiza tarefas burocráticas, como a elaboração de escalas e o controlo de membros, permitindo que a pastoral foque na sua missão litúrgica principal.
 
-O objetivo principal é garantir que a dedicação ao altar seja acompanhada por uma organização eficiente, permitindo que os coordenadores e membros foquem no que é essencial: o serviço litúrgico.
+O **Acolitagem Manager** transforma a organização da paróquia numa experiência digital intuitiva, acessível e eficiente.
 
 ---
 
 ## ✨ Funcionalidades Principais
 
-* **📅 Gestão de Escalas:** Visualização clara e organizada das escalas para missas, celebrações especiais e eventos paroquiais.
-* **📜 Repositório Litúrgico:** Espaço para consulta de manuais, guias de cerimónia e documentos de formação para acólitos e cerimoniários.
-* **📢 Mural de Avisos:** Centralização de comunicações importantes, reuniões e alterações de última hora.
-* **👥 Cadastro de Membros:** Gestão do corpo de acólitos, permitindo um acompanhamento mais próximo de cada integrante da pastoral.
-* **📱 Interface Responsiva:** Acesso facilitado via smartphone, ideal para consultas rápidas antes ou depois das celebrações.
+* **📊 Dashboard Administrativo:** Vista geral instantânea com métricas de membros ativos, escalas pendentes e avisos recentes.
+* **👥 Gestão de Membros:** Registo completo de acólitos e cerimoniários, permitindo a edição de perfis, controlo de status e consulta rápida de contactos.
+* **📅 Gestão de Escalas Dinâmicas:** Visualização de escalas por período e funcionalidade para geração automática de novas escalas para as celebrações.
+* **📚 Biblioteca de Formações:** Repositório centralizado para materiais de estudo, manuais litúrgicos e guias de cerimónia para consulta constante da equipa.
+* **📢 Mural de Avisos:** Espaço dedicado para comunicações internas importantes, garantindo que todos os membros estejam alinhados com as atividades da paróquia.
 
 ---
 
 ## 🛠️ Tecnologias Utilizadas
 
-Este site foi desenvolvido utilizando tecnologias modernas para garantir rapidez e facilidade de manutenção:
+O sistema foi construído com foco em simplicidade de manutenção e rapidez de execução:
 
-* **Front-end:** [React.js](https://reactjs.org/) / [Vite](https://vitejs.dev/) (Interface dinâmica e veloz)
-* **Estilização:** [Tailwind CSS](https://tailwindcss.com/) (Design limpo e responsivo)
-* **Componentes:** [Lucide React](https://lucide.dev/) (Iconografia elegante)
-* **Back-end/Hosting:** [Vercel](https://vercel.com/) / [Netlify](https://www.netlify.com/) (ou tecnologia específica utilizada no projeto)
+* **Linguagem:** [Python 3.x](https://www.python.org/)
+* **Framework:** [Streamlit](https://streamlit.io/) (Interface web reativa e moderna)
+* **Manipulação de Dados:** [Pandas](https://pandas.pydata.org/) (Processamento eficiente de registos e escalas)
+* **Iconografia:** [Lucide/Streamlit Emoji](https://lucide.dev/)
 
 ---
 
-## ⚙️ Instalação e Execução
+## ⚙️ Como Executar a Aplicação
 
-Para rodar o projeto localmente para desenvolvimento:
+Para rodar o sistema no seu ambiente local, siga estes passos:
 
 1. **Clone o repositório:**
 ```bash
@@ -39,38 +39,36 @@ cd site-acolitos
 ```
 
 
-2. **Instale as dependências:**
+2. **Instale as dependências necessárias:**
 ```bash
-npm install
-# ou
-yarn install
+pip install -r requirements.txt
 
 ```
 
 
-3. **Inicie o ambiente de desenvolvimento:**
+3. **Inicie o servidor Streamlit:**
 ```bash
-npm run dev
-# ou
-yarn dev
+streamlit run app.py
 
 ```
 
 
-4. **Aceda à aplicação:**
-Abra o seu navegador em `http://localhost:5173` (ou a porta indicada no terminal).
+4. **Aceda ao sistema:**
+Abra o seu navegador em `http://localhost:8501`
 
 ---
 
-## 📖 Propósito e Dedicação
+## 📂 Estrutura do Projeto
 
-Este sistema foi criado de forma voluntária, unindo os conhecimentos técnicos em desenvolvimento web à missão de servir à comunidade. É uma prova de que a tecnologia pode e deve ser uma aliada na organização das atividades paroquiais, trazendo agilidade aos processos humanos.
+* `app.py`: Ficheiro principal que gere a navegação (Sidebar) e a lógica de cada módulo (Dashboard, Membros, Escalas).
+* `requirements.txt`: Lista de bibliotecas necessárias para o funcionamento do sistema.
+* `.devcontainer/`: Configurações para desenvolvimento isolado em contentores.
 
 ---
 
-## 📬 Contacto
+## 👤 Autor
 
-Desenvolvido por **Felipe Rodrigues de Sousa**.
+Desenvolvido por **Felipe Rodrigues de Sousa** como um contributo tecnológico para a comunidade paroquial.
 
 * **GitHub:** [@sousafeliper](https://www.google.com/search?q=https://github.com/sousafeliper)
 * **E-mail:** rodriguesdesousa.felipe01@gmail.com
