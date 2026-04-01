@@ -643,7 +643,7 @@ def fragment_agenda():
                 dt = st.date_input("Data", min_value=date.today())
                 hr = st.time_input("Hora", value=time(19, 0))
                 desc = st.text_input("Descrição")
-                vagas = st.number_input("Vagas", 1, 20, 4)
+                vagas = st.number_input("Vagas", 0, 50, 2)
                 if st.form_submit_button("Criar", type="primary"):
                     cadastrar_missa(dt.strftime("%Y-%m-%d"), hr.strftime("%H:%M"), desc, vagas)
                     st.rerun(scope="fragment")
@@ -677,7 +677,7 @@ def fragment_agenda():
                     new_dt = c_d.date_input("Data", value=m_dt, key=f"d_{m['id']}")
                     new_hr = c_h.time_input("Hora", value=m_hr, key=f"h_{m['id']}")
                     new_desc = st.text_input("Descrição", value=m['descricao'], key=f"desc_{m['id']}")
-                    new_vagas = st.number_input("Vagas Totais", 1, 50, value=m['vagas_totais'], key=f"v_{m['id']}")
+                    new_vagas = st.number_input("Vagas Totais", 0, 50, value=m['vagas_totais'], key=f"v_{m['id']}")
                     
                     if st.form_submit_button("Salvar Alterações"):
                         atualizar_missa(m['id'], new_dt.strftime("%Y-%m-%d"), new_hr.strftime("%H:%M"), new_desc, new_vagas)
