@@ -130,7 +130,7 @@ def arquivar_missas_antigas():
     try:
         cursor = conn.cursor()
         hoje = date.today()
-        data_limite = (hoje - timedelta(days=14)).strftime("%Y-%m-%d")
+        data_limite = (hoje - timedelta(days=5)).strftime("%Y-%m-%d")
         
         cursor.execute("SELECT id, data FROM missas WHERE data < %s", (data_limite,))
         missas_antigas = cursor.fetchall()
