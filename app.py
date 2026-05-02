@@ -646,7 +646,6 @@ def render_ranking_table(dados, titulo):
 
 @st.fragment
 def fragment_agenda():
-    # Layout remodelado sem colunas esmagadas
     col_titulo, col_btn = st.columns([3, 1])
     with col_titulo:
         st.subheader("Missas Ativas")
@@ -701,7 +700,36 @@ def fragment_agenda():
                     if c2.button("❌", key=f"rm_{m['id']}_{u}"):
                         remover_inscricao_admin(m['id'], u)
                         st.rerun(scope="fragment")
-            else: st.caption("Nenhum acólito inscrito ainda.")
+            else: 
+                st.caption("Nenhum acólito inscrito ainda.")
+                
+            # NOVA FUNCIONALIDADE: Adicionar múltiplos acólitos
+            st.divider()
+            st.write("➕ **Adicionar Acólitos à Escala**")
+            
+            todos_acolitos = listar_acolitos()
+            # Filtra os acólitos que já estão inscritos para evitar duplicidade
+            disponiveis = [a for a in todos_acolitos if a not in inscritos]
+            
+            if disponiveis:
+                selecionados = st.multiselect(
+                    "Selecione os acólitos:", 
+                    options=disponiveis, 
+                    key=f"multi_add_{m['id']}",
+                    placeholder="Escolha um ou mais..."
+                )
+                
+                if st.button("Adicionar Selecionados", key=f"btn_multi_add_{m['id']}", type="secondary", use_container_width=True):
+                    if selecionados:
+                        for ac in selecionados:
+                            # Ignoramos o limite de vagas porque é o coordenador que está adicionando
+                            inscrever_acolito(m['id'], ac, ignorar_vagas=True) 
+                        st.toast(f"✅ {len(selecionados)} acólito(s) adicionado(s) com sucesso!")
+                        st.rerun(scope="fragment")
+                    else:
+                        st.warning("Selecione ao menos um acólito na lista acima.")
+            else:
+                st.caption("✨ Todos os acólitos cadastrados já estão nesta missa.")
 
 @st.fragment
 def fragment_historico():
