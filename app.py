@@ -1,8 +1,8 @@
 import streamlit as st
 import psycopg2
 import psycopg2.pool
-import pytz 
-from datetime import datetime, date, time, timedelta 
+import pytz
+from datetime import datetime, date, time, timedelta
 from typing import List, Dict, Optional, Tuple
 
 # ==================== CONFIGURAÇÃO DA PÁGINA ====================
@@ -113,6 +113,21 @@ def criar_tabelas():
                 id SERIAL PRIMARY KEY,
                 nome_acolito VARCHAR(255) NOT NULL,
                 data_missa DATE NOT NULL
+            )
+        """)
+        # Novas tabelas para automação
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS missas_padrao (
+                id SERIAL PRIMARY KEY,
+                dia_semana INTEGER NOT NULL,
+                hora VARCHAR(5) NOT NULL,
+                descricao TEXT,
+                vagas_totais INTEGER NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS controle_geracao (
+                semana_id VARCHAR(15) PRIMARY KEY
             )
         """)
         conn.commit()
@@ -469,6 +484,95 @@ def remover_acolito(nome: str) -> bool:
         if cursor: cursor.close()
         release_db_connection(conn)
 
+# ==================== FUNÇÕES DA AUTOMAÇÃO DE MISSAS ====================
+
+def cadastrar_missa_padrao(dia_semana: int, hora: str, descricao: str, vagas_totais: int) -> bool:
+    conn = get_db_connection()
+    if not conn: return False
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO missas_padrao (dia_semana, hora, descricao, vagas_totais) VALUES (%s, %s, %s, %s)", 
+                       (dia_semana, hora, descricao, vagas_totais))
+        conn.commit()
+        return True
+    except psycopg2.Error:
+        if conn: conn.rollback()
+        return False
+    finally:
+        if cursor: cursor.close()
+        release_db_connection(conn)
+
+def listar_missas_padrao() -> List[Dict]:
+    conn = get_db_connection()
+    if not conn: return []
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, dia_semana, hora, descricao, vagas_totais FROM missas_padrao ORDER BY dia_semana, hora")
+        return [{'id': r[0], 'dia_semana': r[1], 'hora': r[2], 'descricao': r[3], 'vagas_totais': r[4]} for r in cursor.fetchall()]
+    finally:
+        if cursor: cursor.close()
+        release_db_connection(conn)
+
+def excluir_missa_padrao(padrao_id: int) -> bool:
+    conn = get_db_connection()
+    if not conn: return False
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM missas_padrao WHERE id = %s", (padrao_id,))
+        conn.commit()
+        return True
+    finally:
+        if cursor: cursor.close()
+        release_db_connection(conn)
+
+def gerar_missas_automaticamente():
+    """Gera as missas da próxima semana se já passou de sábado às 12:59"""
+    conn = get_db_connection()
+    if not conn: return
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        fuso = pytz.timezone('America/Sao_Paulo')
+        agora = datetime.now(fuso)
+        
+        # Checa se passou de Sábado 12:59 (weekday: 5 = Sábado, 6 = Domingo)
+        passou_limite = agora.weekday() == 6 or (agora.weekday() == 5 and (agora.hour > 12 or (agora.hour == 12 and agora.minute >= 59)))
+        
+        if passou_limite:
+            # Encontra a data da próxima SEGUNDA-FEIRA
+            dias_para_segunda = (7 - agora.weekday()) % 7
+            if dias_para_segunda == 0: dias_para_segunda = 7
+            proxima_segunda = agora.date() + timedelta(days=dias_para_segunda)
+            
+            # O ID da semana será a data da próxima segunda-feira (Ex: "2026-05-11")
+            id_semana = proxima_segunda.strftime("%Y-%m-%d")
+            
+            cursor.execute("SELECT COUNT(*) FROM controle_geracao WHERE semana_id = %s", (id_semana,))
+            if cursor.fetchone()[0] == 0:
+                # Ainda não foi gerado. Vamos gerar!
+                cursor.execute("SELECT dia_semana, hora, descricao, vagas_totais FROM missas_padrao")
+                padroes = cursor.fetchall()
+                
+                for dia, hora, desc, vagas in padroes:
+                    # Calcula o dia exato da missa (0=Segunda, 6=Domingo)
+                    data_missa = proxima_segunda + timedelta(days=dia)
+                    cursor.execute("""
+                        INSERT INTO missas (data, hora, descricao, vagas_totais) 
+                        VALUES (%s, %s, %s, %s)
+                    """, (data_missa.strftime("%Y-%m-%d"), hora, desc, vagas))
+                
+                # Salva no banco que esta semana já foi gerada
+                cursor.execute("INSERT INTO controle_geracao (semana_id) VALUES (%s)", (id_semana,))
+                conn.commit()
+    except psycopg2.Error:
+        if conn: conn.rollback()
+    finally:
+        if cursor: cursor.close()
+        release_db_connection(conn)
+
 # ==================== FUNÇÕES DE INTERFACE / UI ====================
 
 @st.dialog("➕ Criar Nova Missa")
@@ -645,6 +749,35 @@ def render_ranking_table(dados, titulo):
         st.info("Sem dados consolidados para este período.")
 
 @st.fragment
+def fragment_missas_padrao():
+    st.info("🤖 **Automação:** Missas cadastradas aqui aparecerão na escala automaticamente todo Sábado às 12:59 para a semana seguinte (Segunda a Domingo).")
+    
+    with st.form("form_novo_padrao", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        dias_dict = {0: "Segunda", 1: "Terça", 2: "Quarta", 3: "Quinta", 4: "Sexta", 5: "Sábado", 6: "Domingo"}
+        dia_sel = c1.selectbox("Dia da Semana", options=list(dias_dict.keys()), format_func=lambda x: dias_dict[x])
+        hr_sel = c2.time_input("Hora", value=time(19, 0))
+        desc_sel = st.text_input("Descrição (Ex: Missa Paroquial)")
+        vagas_sel = st.number_input("Vagas", 1, 50, 2)
+        
+        if st.form_submit_button("➕ Salvar na Rotina", type="primary"):
+            cadastrar_missa_padrao(dia_sel, hr_sel.strftime("%H:%M"), desc_sel, vagas_sel)
+            st.rerun(scope="fragment")
+
+    st.divider()
+    st.write("📋 **Rotina Semanal Cadastrada**")
+    padroes = listar_missas_padrao()
+    if not padroes:
+        st.caption("Nenhuma missa padrão cadastrada ainda.")
+    else:
+        for p in padroes:
+            c_texto, c_btn = st.columns([4, 1])
+            c_texto.write(f"**{dias_dict[p['dia_semana']]}** às **{p['hora']}** - {p['descricao']} ({p['vagas_totais']} vagas)")
+            if c_btn.button("🗑️", key=f"del_padrao_{p['id']}", use_container_width=True):
+                excluir_missa_padrao(p['id'])
+                st.rerun(scope="fragment")
+
+@st.fragment
 def fragment_agenda():
     col_titulo, col_btn = st.columns([3, 1])
     with col_titulo:
@@ -761,12 +894,16 @@ def tela_admin():
         st.rerun()
     st.divider()
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 Agenda", "👥 Equipe", "🏆 Rankings", "📜 Histórico"])
+    # Aba 2 nova adicionada aqui:
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 Agenda", "🔁 Padrão Semanal", "👥 Equipe", "🏆 Rankings", "📜 Histórico"])
     
     with tab1: # AGENDA
         fragment_agenda()
 
-    with tab2: # EQUIPE
+    with tab2: # PADRÃO SEMANAL
+        fragment_missas_padrao()
+
+    with tab3: # EQUIPE
         c_add, c_view = st.columns([1, 2])
         with c_add:
             with st.form("add_ac"):
@@ -783,7 +920,7 @@ def tela_admin():
                     remover_acolito(ac)
                     st.rerun()
 
-    with tab3: # RANKINGS
+    with tab4: # RANKINGS
         st.subheader("Painel de Pontuação")
         st.caption("Selecione o período de referência para visualizar os rankings.")
         c_mes, c_ano, c_vazio = st.columns([1, 1, 2])
@@ -811,7 +948,7 @@ def tela_admin():
         with rt3:
             render_ranking_table(obter_ranking_filtrado('anual', data_referencia), f"Ranking: Ano {sel_ano}")
 
-    with tab4: # HISTORICO
+    with tab5: # HISTORICO
         fragment_historico()
 
 # ==================== MAIN ====================
@@ -819,6 +956,7 @@ def tela_admin():
 def main():
     criar_tabelas()
     arquivar_missas_antigas()
+    gerar_missas_automaticamente() # <--- Automação conectada aqui
     
     if 'tela' not in st.session_state:
         st.session_state['tela'] = 'login'
