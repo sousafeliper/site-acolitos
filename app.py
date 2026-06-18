@@ -484,6 +484,28 @@ def remover_acolito(nome: str) -> bool:
         if cursor: cursor.close()
         release_db_connection(conn)
 
+def alterar_nome_acolito(nome_antigo: str, nome_novo: str) -> bool:
+    """Atualiza o nome do acólito em todas as tabelas para preservar o histórico."""
+    conn = get_db_connection()
+    if not conn: return False
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        
+        # Atualiza o nome nas 3 tabelas em que ele aparece
+        cursor.execute("UPDATE acolitos SET nome = %s WHERE nome = %s", (nome_novo.strip(), nome_antigo))
+        cursor.execute("UPDATE inscricoes SET nome_acolito = %s WHERE nome_acolito = %s", (nome_novo.strip(), nome_antigo))
+        cursor.execute("UPDATE historico_pontos SET nome_acolito = %s WHERE nome_acolito = %s", (nome_novo.strip(), nome_antigo))
+        
+        conn.commit()
+        return True
+    except psycopg2.Error as e:
+        if conn: conn.rollback()
+        return False
+    finally:
+        if cursor: cursor.close()
+        release_db_connection(conn)
+
 # ==================== FUNÇÕES DA AUTOMAÇÃO DE MISSAS ====================
 
 def cadastrar_missa_padrao(dia_semana: int, hora: str, descricao: str, vagas_totais: int) -> bool:
@@ -605,6 +627,23 @@ def modal_editar_missa(m):
             if atualizar_missa(m['id'], new_dt.strftime("%Y-%m-%d"), new_hr.strftime("%H:%M"), new_desc, new_vagas):
                 st.toast("✅ Missa atualizada!")
                 st.rerun()
+
+@st.dialog("✏️ Renomear Acólito")
+def modal_renomear_acolito(nome_atual: str):
+    with st.form(f"edit_ac_form_{nome_atual}"):
+        novo_nome = st.text_input("Novo Nome", value=nome_atual)
+        
+        if st.form_submit_button("Salvar Alteração", type="primary", use_container_width=True):
+            if novo_nome.strip() and novo_nome.strip() != nome_atual:
+                if alterar_nome_acolito(nome_atual, novo_nome):
+                    st.toast("✅ Nome atualizado com sucesso em todo o histórico!")
+                    st.rerun()
+                else:
+                    st.error("Erro ao alterar o nome.")
+            elif novo_nome.strip() == nome_atual:
+                st.warning("O nome inserido é igual ao atual.")
+            else:
+                st.warning("O nome não pode ficar vazio.")
 
 @st.fragment
 def renderizar_card_missa(missa_id: int, nome_usuario: str):
@@ -905,20 +944,50 @@ def tela_admin():
 
     with tab3: # EQUIPE
         c_add, c_view = st.columns([1, 2])
+        
         with c_add:
-            with st.form("add_ac"):
+            with st.form("add_ac", clear_on_submit=True):
                 nm = st.text_input("Nome do Novo Acólito")
                 if st.form_submit_button("Adicionar", type="primary", use_container_width=True):
-                    cadastrar_acolito(nm)
-                    st.rerun()
+                    if nm and nm.strip():
+                        cadastrar_acolito(nm)
+                        st.rerun()
+                        
         with c_view:
             st.markdown("#### Acólitos Ativos")
-            for ac in listar_acolitos():
-                c1, c2 = st.columns([4,1])
-                c1.write(f"👤 {ac}")
-                if c2.button("🗑️", key=f"d_ac_{ac}"):
-                    remover_acolito(ac)
-                    st.rerun()
+            
+            acolitos_lista = listar_acolitos()
+            if not acolitos_lista:
+                st.info("Nenhum acólito cadastrado.")
+                
+            for ac in acolitos_lista:
+                with st.container(border=True): # Container visual para organizar melhor os botões
+                    c1, c_edit, c_del = st.columns([3, 1, 1])
+                    
+                    c1.write(f"👤 **{ac}**")
+                    
+                    # 1) Botão de Editar Nome
+                    if c_edit.button("✏️", key=f"edit_ac_{ac}", use_container_width=True):
+                        modal_renomear_acolito(ac)
+                        
+                    # 2) Botão de Deletar (com trava de confirmação)
+                    if c_del.button("🗑️", key=f"btn_del_req_ac_{ac}", use_container_width=True):
+                        st.session_state[f"confirm_del_ac_{ac}"] = True
+
+                    # 3) Dupla Confirmação de Exclusão
+                    if st.session_state.get(f"confirm_del_ac_{ac}", False):
+                        st.warning(f"⚠️ **Tem certeza que deseja excluir '{ac}'?**")
+                        cd1, cd2 = st.columns(2)
+                        
+                        if cd1.button("✅ Sim, Excluir", key=f"del_ac_sim_{ac}", type="primary", use_container_width=True):
+                            if remover_acolito(ac):
+                                st.toast(f"Acólito {ac} excluído.")
+                            del st.session_state[f"confirm_del_ac_{ac}"]
+                            st.rerun(scope="fragment")
+                            
+                        if cd2.button("❌ Cancelar", key=f"del_ac_nao_{ac}", use_container_width=True):
+                            del st.session_state[f"confirm_del_ac_{ac}"]
+                            st.rerun(scope="fragment")
 
     with tab4: # RANKINGS
         st.subheader("Painel de Pontuação")
