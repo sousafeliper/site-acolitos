@@ -506,6 +506,39 @@ def alterar_nome_acolito(nome_antigo: str, nome_novo: str) -> bool:
         if cursor: cursor.close()
         release_db_connection(conn)
 
+def obter_ultimas_tres_missas(nome_acolito: str) -> List[Dict]:
+    conn = get_db_connection()
+    if not conn: return []
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        # Junta o histórico ativo (inscricoes + missas) com o histórico arquivado
+        cursor.execute("""
+            SELECT data, descricao FROM (
+                SELECT m.data as data, m.descricao as descricao
+                FROM inscricoes i
+                JOIN missas m ON i.missa_id = m.id
+                WHERE i.nome_acolito = %s
+
+                UNION ALL
+
+                SELECT TO_CHAR(data_missa, 'YYYY-MM-DD') as data, 'Missa Arquivada' as descricao
+                FROM historico_pontos
+                WHERE nome_acolito = %s
+            ) AS historico_completo
+            ORDER BY data DESC
+            LIMIT 3
+        """, (nome_acolito, nome_acolito))
+
+        resultados = cursor.fetchall()
+        return [{'data': r[0], 'descricao': r[1]} for r in resultados]
+    except psycopg2.Error as e:
+        st.error(f"Erro ao buscar histórico: {e}")
+        return []
+    finally:
+        if cursor: cursor.close()
+        release_db_connection(conn)
+
 # ==================== FUNÇÕES DA AUTOMAÇÃO DE MISSAS ====================
 
 def cadastrar_missa_padrao(dia_semana: int, hora: str, descricao: str, vagas_totais: int) -> bool:
@@ -644,6 +677,27 @@ def modal_renomear_acolito(nome_atual: str):
                 st.warning("O nome inserido é igual ao atual.")
             else:
                 st.warning("O nome não pode ficar vazio.")
+
+@st.dialog("📜 Últimas Missas Servidas")
+def modal_ultimas_missas(nome_acolito: str):
+    st.markdown(f"Histórico recente de **{nome_acolito}**")
+
+    ultimas = obter_ultimas_tres_missas(nome_acolito)
+
+    if not ultimas:
+        st.info("Nenhuma missa registrada para este acólito ainda.")
+    else:
+        for m in ultimas:
+            try:
+                # Tenta formatar a data para o padrão BR
+                d_obj = datetime.strptime(m['data'], "%Y-%m-%d")
+                d_fmt = d_obj.strftime("%d/%m/%Y")
+            except:
+                d_fmt = m['data']
+
+            with st.container(border=True):
+                st.markdown(f"🗓️ **{d_fmt}**")
+                st.caption(f"✨ {m['descricao']}")
 
 @st.fragment
 def renderizar_card_missa(missa_id: int, nome_usuario: str):
@@ -926,98 +980,142 @@ def fragment_historico():
                         inscrever_acolito(m['id'], acolito_add, ignorar_vagas=True)
                         st.rerun(scope="fragment")
 
+@st.fragment
+def fragment_equipe():
+    st.subheader("👥 Gestão da Equipe")
+    c_add, c_view = st.columns([1, 2])
+
+    with c_add:
+        with st.form("add_ac", clear_on_submit=True):
+            nm = st.text_input("Nome do Novo Acólito")
+            if st.form_submit_button("Adicionar", type="primary", use_container_width=True):
+                if nm and nm.strip():
+                    cadastrar_acolito(nm)
+                    st.rerun(scope="fragment") # Recarrega só o fragmento
+
+    with c_view:
+        st.markdown("#### Acólitos Ativos")
+        acolitos_lista = listar_acolitos()
+
+        if not acolitos_lista:
+            st.info("Nenhum acólito cadastrado.")
+
+        for ac in acolitos_lista:
+            with st.container(border=True):
+                c1, c_hist, c_edit, c_del = st.columns([2.5, 1, 1, 1])
+                c1.write(f"👤 **{ac}**")
+
+                if c_hist.button("📜", key=f"hist_ac_{ac}", help="Ver últimas 3 missas", use_container_width=True):
+                    modal_ultimas_missas(ac)
+                if c_edit.button("✏️", key=f"edit_ac_{ac}", use_container_width=True):
+                    modal_renomear_acolito(ac)
+                if c_del.button("🗑️", key=f"btn_del_req_ac_{ac}", use_container_width=True):
+                    st.session_state[f"confirm_del_ac_{ac}"] = True
+
+                if st.session_state.get(f"confirm_del_ac_{ac}", False):
+                    st.warning(f"⚠️ **Deseja excluir '{ac}'?**")
+                    cd1, cd2 = st.columns(2)
+                    if cd1.button("✅ Sim", key=f"del_ac_sim_{ac}", type="primary", use_container_width=True):
+                        if remover_acolito(ac): st.toast(f"Acólito {ac} excluído.")
+                        del st.session_state[f"confirm_del_ac_{ac}"]
+                        st.rerun(scope="fragment")
+                    if cd2.button("❌ Não", key=f"del_ac_nao_{ac}", use_container_width=True):
+                        del st.session_state[f"confirm_del_ac_{ac}"]
+                        st.rerun(scope="fragment")
+
+def renderizar_rankings():
+    st.subheader("🏆 Painel de Pontuação")
+    st.caption("Selecione o período de referência para visualizar os rankings.")
+    c_mes, c_ano, c_vazio = st.columns([1, 1, 2])
+
+    meses = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho',
+             7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+    hj = date.today()
+
+    with c_mes:
+        sel_mes_num = st.selectbox("Mês", options=list(meses.keys()), format_func=lambda x: meses[x], index=hj.month-1)
+    with c_ano:
+        sel_ano = st.number_input("Ano", min_value=2024, max_value=2030, value=hj.year)
+
+    data_referencia = date(sel_ano, sel_mes_num, 1)
+
+    # Aqui podemos manter tabs porque a consulta ao banco do ranking é a mesma para os 3,
+    # ele só muda o filtro na memória do Python
+    rt1, rt2, rt3 = st.tabs(["📅 Mensal", "📊 Trimestral", "📆 Anual"])
+    with rt1: render_ranking_table(obter_ranking_filtrado('mensal', data_referencia), f"Ranking: {meses[sel_mes_num]}/{sel_ano}")
+    with rt2:
+        trimestre = (sel_mes_num - 1) // 3 + 1
+        render_ranking_table(obter_ranking_filtrado('trimestral', data_referencia), f"Ranking: {trimestre}º Trimestre/{sel_ano}")
+    with rt3: render_ranking_table(obter_ranking_filtrado('anual', data_referencia), f"Ranking: Ano {sel_ano}")
+
 def tela_admin():
     st.title("⚙️ Painel do Coordenador")
-    if st.button("← Voltar / Sair"):
-        st.session_state['tela'] = 'login'
-        st.rerun()
+
+    # Inicializa a subtela se não existir
+    if 'subtela_admin' not in st.session_state:
+        st.session_state['subtela_admin'] = 'menu'
+
+    # --- CABEÇALHO DE NAVEGAÇÃO ---
+    col_sair, col_voltar = st.columns([1, 1])
+    with col_sair:
+        if st.button("🚪 Sair do Sistema", use_container_width=True):
+            st.session_state['tela'] = 'login'
+            st.session_state['subtela_admin'] = 'menu' # Reseta o menu para a próxima vez
+            st.rerun()
+
+    with col_voltar:
+        # Só mostra o botão "Voltar ao Menu" se não estiver no menu principal
+        if st.session_state['subtela_admin'] != 'menu':
+            if st.button("⬅️ Voltar ao Menu", type="primary", use_container_width=True):
+                st.session_state['subtela_admin'] = 'menu'
+                st.rerun()
+
     st.divider()
-    
-    # Aba 2 nova adicionada aqui:
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 Agenda", "🔁 Padrão Semanal", "👥 Equipe", "🏆 Rankings", "📜 Histórico"])
-    
-    with tab1: # AGENDA
+
+    # --- ROTEAMENTO DAS PÁGINAS ---
+    tela_atual = st.session_state['subtela_admin']
+
+    if tela_atual == 'menu':
+        st.markdown("### Selecione um módulo:")
+
+        # Cria uma grade de botões bonitinha (2 em 2)
+        c1, c2 = st.columns(2)
+        if c1.button("📋 Agenda", use_container_width=True):
+            st.session_state['subtela_admin'] = 'agenda'
+            st.rerun()
+
+        if c2.button("🔁 Padrão Semanal", use_container_width=True):
+            st.session_state['subtela_admin'] = 'padrao'
+            st.rerun()
+
+        c3, c4 = st.columns(2)
+        if c3.button("👥 Equipe", use_container_width=True):
+            st.session_state['subtela_admin'] = 'equipe'
+            st.rerun()
+
+        if c4.button("🏆 Rankings", use_container_width=True):
+            st.session_state['subtela_admin'] = 'rankings'
+            st.rerun()
+
+        c5, c_vazio = st.columns(2)
+        if c5.button("📜 Histórico", use_container_width=True):
+            st.session_state['subtela_admin'] = 'historico'
+            st.rerun()
+
+    # --- RENDERIZAÇÃO DAS SUBTELAS ---
+    elif tela_atual == 'agenda':
         fragment_agenda()
 
-    with tab2: # PADRÃO SEMANAL
+    elif tela_atual == 'padrao':
         fragment_missas_padrao()
 
-    with tab3: # EQUIPE
-        c_add, c_view = st.columns([1, 2])
-        
-        with c_add:
-            with st.form("add_ac", clear_on_submit=True):
-                nm = st.text_input("Nome do Novo Acólito")
-                if st.form_submit_button("Adicionar", type="primary", use_container_width=True):
-                    if nm and nm.strip():
-                        cadastrar_acolito(nm)
-                        st.rerun()
-                        
-        with c_view:
-            st.markdown("#### Acólitos Ativos")
-            
-            acolitos_lista = listar_acolitos()
-            if not acolitos_lista:
-                st.info("Nenhum acólito cadastrado.")
-                
-            for ac in acolitos_lista:
-                with st.container(border=True): # Container visual para organizar melhor os botões
-                    c1, c_edit, c_del = st.columns([3, 1, 1])
-                    
-                    c1.write(f"👤 **{ac}**")
-                    
-                    # 1) Botão de Editar Nome
-                    if c_edit.button("✏️", key=f"edit_ac_{ac}", use_container_width=True):
-                        modal_renomear_acolito(ac)
-                        
-                    # 2) Botão de Deletar (com trava de confirmação)
-                    if c_del.button("🗑️", key=f"btn_del_req_ac_{ac}", use_container_width=True):
-                        st.session_state[f"confirm_del_ac_{ac}"] = True
+    elif tela_atual == 'equipe':
+        fragment_equipe()
 
-                    # 3) Dupla Confirmação de Exclusão
-                    if st.session_state.get(f"confirm_del_ac_{ac}", False):
-                        st.warning(f"⚠️ **Tem certeza que deseja excluir '{ac}'?**")
-                        cd1, cd2 = st.columns(2)
-                        
-                        if cd1.button("✅ Sim, Excluir", key=f"del_ac_sim_{ac}", type="primary", use_container_width=True):
-                            if remover_acolito(ac):
-                                st.toast(f"Acólito {ac} excluído.")
-                            del st.session_state[f"confirm_del_ac_{ac}"]
-                            st.rerun(scope="fragment")
-                            
-                        if cd2.button("❌ Cancelar", key=f"del_ac_nao_{ac}", use_container_width=True):
-                            del st.session_state[f"confirm_del_ac_{ac}"]
-                            st.rerun(scope="fragment")
+    elif tela_atual == 'rankings':
+        renderizar_rankings()
 
-    with tab4: # RANKINGS
-        st.subheader("Painel de Pontuação")
-        st.caption("Selecione o período de referência para visualizar os rankings.")
-        c_mes, c_ano, c_vazio = st.columns([1, 1, 2])
-        
-        meses = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho',
-                 7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
-        
-        hj = date.today()
-        
-        with c_mes:
-            sel_mes_num = st.selectbox("Mês", options=list(meses.keys()), 
-                                       format_func=lambda x: meses[x], index=hj.month-1)
-        with c_ano:
-            sel_ano = st.number_input("Ano", min_value=2024, max_value=2030, value=hj.year)
-            
-        data_referencia = date(sel_ano, sel_mes_num, 1)
-
-        rt1, rt2, rt3 = st.tabs(["📅 Mensal", "📊 Trimestral", "📆 Anual"])
-        
-        with rt1:
-            render_ranking_table(obter_ranking_filtrado('mensal', data_referencia), f"Ranking: {meses[sel_mes_num]}/{sel_ano}")
-        with rt2:
-            trimestre = (sel_mes_num - 1) // 3 + 1
-            render_ranking_table(obter_ranking_filtrado('trimestral', data_referencia), f"Ranking: {trimestre}º Trimestre/{sel_ano}")
-        with rt3:
-            render_ranking_table(obter_ranking_filtrado('anual', data_referencia), f"Ranking: Ano {sel_ano}")
-
-    with tab5: # HISTORICO
+    elif tela_atual == 'historico':
         fragment_historico()
 
 # ==================== MAIN ====================
