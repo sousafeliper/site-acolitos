@@ -1,4 +1,5 @@
-streamlit
+streamlit==1.38.0
+starlette<0.39.0
 psycopg2-binary
 pytz
 pandas
