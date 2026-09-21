@@ -628,6 +628,62 @@ def gerar_missas_automaticamente():
         if cursor: cursor.close()
         release_db_connection(conn)
 
+def obter_baixa_frequencia(dias: int = 90, limite: int = 5) -> List[Tuple[str, int]]:
+    conn = get_db_connection()
+    if not conn: return []
+    cursor = None
+    try:
+        cursor = conn.cursor()
+
+        # 1. Pegar todos os acólitos ativos
+        cursor.execute("SELECT nome FROM acolitos")
+        acolitos = {row[0]: 0 for row in cursor.fetchall()}
+
+        hoje = date.today()
+        data_limite = hoje - timedelta(days=dias)
+
+        # 2. Buscar missas no histórico (arquivadas) nos últimos 90 dias
+        cursor.execute("""
+            SELECT nome_acolito
+            FROM historico_pontos
+            WHERE data_missa >= %s
+        """, (data_limite,))
+        historico = cursor.fetchall()
+
+        # 3. Buscar nas missas ativas (apenas as que já passaram ou até hoje)
+        cursor.execute("""
+            SELECT i.nome_acolito
+            FROM inscricoes i
+            JOIN missas m ON i.missa_id = m.id
+            WHERE m.data >= %s AND m.data <= %s
+        """, (data_limite.strftime("%Y-%m-%d"), hoje.strftime("%Y-%m-%d")))
+        ativas = cursor.fetchall()
+
+    except psycopg2.Error as e:
+        st.error(f"Erro ao buscar frequência: {e}")
+        return []
+    finally:
+        if cursor: cursor.close()
+        release_db_connection(conn)
+
+    # Contabilizar histórico
+    for row in historico:
+        nome = row[0]
+        if nome in acolitos:
+            acolitos[nome] += 1
+
+    # Contabilizar ativas
+    for row in ativas:
+        nome = row[0]
+        if nome in acolitos:
+            acolitos[nome] += 1
+
+    # Filtrar (menos que 5) e ordenar (crescente: do que menos serviu para o que mais serviu)
+    resultado = [(nome, qtd) for nome, qtd in acolitos.items() if qtd < limite]
+    resultado.sort(key=lambda x: x[1])
+
+    return resultado
+
 # ==================== FUNÇÕES DE INTERFACE / UI ====================
 
 @st.dialog("➕ Criar Nova Missa")
@@ -983,45 +1039,69 @@ def fragment_historico():
 @st.fragment
 def fragment_equipe():
     st.subheader("👥 Gestão da Equipe")
-    c_add, c_view = st.columns([1, 2])
+    tab_gestao, tab_alerta = st.tabs(["⚙️ Gestão Ativos", "⚠️ Baixa Frequência (90 dias)"])
 
-    with c_add:
-        with st.form("add_ac", clear_on_submit=True):
-            nm = st.text_input("Nome do Novo Acólito")
-            if st.form_submit_button("Adicionar", type="primary", use_container_width=True):
-                if nm and nm.strip():
-                    cadastrar_acolito(nm)
-                    st.rerun(scope="fragment") # Recarrega só o fragmento
+    with tab_gestao:
+        c_add, c_view = st.columns([1, 2])
 
-    with c_view:
-        st.markdown("#### Acólitos Ativos")
-        acolitos_lista = listar_acolitos()
-
-        if not acolitos_lista:
-            st.info("Nenhum acólito cadastrado.")
-
-        for ac in acolitos_lista:
-            with st.container(border=True):
-                c1, c_hist, c_edit, c_del = st.columns([2.5, 1, 1, 1])
-                c1.write(f"👤 **{ac}**")
-
-                if c_hist.button("📜", key=f"hist_ac_{ac}", help="Ver últimas 3 missas", use_container_width=True):
-                    modal_ultimas_missas(ac)
-                if c_edit.button("✏️", key=f"edit_ac_{ac}", use_container_width=True):
-                    modal_renomear_acolito(ac)
-                if c_del.button("🗑️", key=f"btn_del_req_ac_{ac}", use_container_width=True):
-                    st.session_state[f"confirm_del_ac_{ac}"] = True
-
-                if st.session_state.get(f"confirm_del_ac_{ac}", False):
-                    st.warning(f"⚠️ **Deseja excluir '{ac}'?**")
-                    cd1, cd2 = st.columns(2)
-                    if cd1.button("✅ Sim", key=f"del_ac_sim_{ac}", type="primary", use_container_width=True):
-                        if remover_acolito(ac): st.toast(f"Acólito {ac} excluído.")
-                        del st.session_state[f"confirm_del_ac_{ac}"]
+        with c_add:
+            with st.form("add_ac", clear_on_submit=True):
+                nm = st.text_input("Nome do Novo Acólito")
+                if st.form_submit_button("Adicionar", type="primary", use_container_width=True):
+                    if nm and nm.strip():
+                        cadastrar_acolito(nm)
                         st.rerun(scope="fragment")
-                    if cd2.button("❌ Não", key=f"del_ac_nao_{ac}", use_container_width=True):
-                        del st.session_state[f"confirm_del_ac_{ac}"]
-                        st.rerun(scope="fragment")
+
+        with c_view:
+            st.markdown("#### Acólitos Ativos")
+            acolitos_lista = listar_acolitos()
+
+            if not acolitos_lista:
+                st.info("Nenhum acólito cadastrado.")
+
+            for ac in acolitos_lista:
+                with st.container(border=True):
+                    c1, c_hist, c_edit, c_del = st.columns([2.5, 1, 1, 1])
+                    c1.write(f"👤 **{ac}**")
+
+                    if c_hist.button("📜", key=f"hist_ac_{ac}", help="Ver últimas 3 missas", use_container_width=True):
+                        modal_ultimas_missas(ac)
+                    if c_edit.button("✏️", key=f"edit_ac_{ac}", use_container_width=True):
+                        modal_renomear_acolito(ac)
+                    if c_del.button("🗑️", key=f"btn_del_req_ac_{ac}", use_container_width=True):
+                        st.session_state[f"confirm_del_ac_{ac}"] = True
+
+                    if st.session_state.get(f"confirm_del_ac_{ac}", False):
+                        st.warning(f"⚠️ **Deseja excluir '{ac}'?**")
+                        cd1, cd2 = st.columns(2)
+                        if cd1.button("✅ Sim", key=f"del_ac_sim_{ac}", type="primary", use_container_width=True):
+                            if remover_acolito(ac): st.toast(f"Acólito {ac} excluído.")
+                            del st.session_state[f"confirm_del_ac_{ac}"]
+                            st.rerun(scope="fragment")
+                        if cd2.button("❌ Não", key=f"del_ac_nao_{ac}", use_container_width=True):
+                            del st.session_state[f"confirm_del_ac_{ac}"]
+                            st.rerun(scope="fragment")
+
+    with tab_alerta:
+        st.markdown("#### Acólitos Precisando de Atenção")
+        st.caption("Lista de acólitos que serviram **menos de 5 vezes** nos últimos **90 dias**.")
+
+        dados_alerta = obter_baixa_frequencia(dias=90, limite=5)
+
+        if not dados_alerta:
+            st.success("🎉 Todos os acólitos estão servindo com boa frequência!")
+        else:
+            for nome, qtd in dados_alerta:
+                with st.container(border=True):
+                    c_nome, c_qtd = st.columns([4, 1])
+                    c_nome.write(f"👤 **{nome}**")
+
+                    if qtd == 0:
+                        c_qtd.error(f"{qtd} missas")
+                    elif qtd <= 2:
+                        c_qtd.warning(f"{qtd} missas")
+                    else:
+                        c_qtd.info(f"{qtd} missas")
 
 def renderizar_rankings():
     st.subheader("🏆 Painel de Pontuação")

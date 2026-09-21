@@ -1,74 +1,83 @@
-# ⛪ Pastoral de Acólitos | Sistema de Gestão e Organização
+# Pastoral de Acólitos
 
-Este projeto foi desenvolvido com o propósito de modernizar e centralizar a gestão da **Pastoral de Acólitos**, servindo como uma ferramenta administrativa essencial para a coordenação. O sistema automatiza tarefas burocráticas, como a elaboração de escalas e o controlo de membros, permitindo que a pastoral foque na sua missão litúrgica principal.
+Sistema web para organizar a escala de acólitos, desenvolvido com Streamlit e PostgreSQL.
 
-O **Acolitagem Manager** transforma a organização da paróquia numa experiência digital intuitiva, acessível e eficiente.
+## Funcionalidades
 
----
+### Acesso do acólito
 
-## ✨ Funcionalidades Principais
+- Seleção do nome cadastrado para entrar no sistema.
+- Visualização das próximas missas disponíveis.
+- Inscrição em uma missa enquanto houver vagas.
+- Cancelamento da própria inscrição.
+- Ranking mensal de pontos.
 
-* **📊 Dashboard Administrativo:** Vista geral instantânea com métricas de membros ativos, escalas pendentes e avisos recentes.
-* **👥 Gestão de Membros:** Registo completo de acólitos e cerimoniários, permitindo a edição de perfis, controlo de status e consulta rápida de contactos.
-* **📅 Gestão de Escalas Dinâmicas:** Visualização de escalas por período e funcionalidade para geração automática de novas escalas para as celebrações.
-* **📚 Biblioteca de Formações:** Repositório centralizado para materiais de estudo, manuais litúrgicos e guias de cerimónia para consulta constante da equipa.
-* **📢 Mural de Avisos:** Espaço dedicado para comunicações internas importantes, garantindo que todos os membros estejam alinhados com as atividades da paróquia.
+### Área do coordenador
 
----
+- Cadastro, renomeação, consulta e remoção de acólitos.
+- Agenda de missas ativas, com criação, edição e exclusão.
+- Cadastro de uma rotina semanal de missas.
+- Geração automática das missas da semana seguinte a partir da rotina cadastrada.
+- Histórico de missas finalizadas e arquivamento dos pontos.
+- Rankings mensal, trimestral e anual.
+- Aba de baixa frequência, listando acólitos que serviram menos de 5 vezes nos últimos 90 dias.
 
-## 🛠️ Tecnologias Utilizadas
+## Tecnologias
 
-O sistema foi construído com foco em simplicidade de manutenção e rapidez de execução:
+- [Python 3](https://www.python.org/)
+- [Streamlit](https://streamlit.io/)
+- [PostgreSQL](https://www.postgresql.org/)
+- [psycopg2](https://www.psycopg.org/)
+- [pytz](https://pypi.org/project/pytz/)
 
-* **Linguagem:** [Python 3.x](https://www.python.org/)
-* **Framework:** [Streamlit](https://streamlit.io/) (Interface web reativa e moderna)
-* **Manipulação de Dados:** [Pandas](https://pandas.pydata.org/) (Processamento eficiente de registos e escalas)
-* **Iconografia:** [Lucide/Streamlit Emoji](https://lucide.dev/)
+As dependências do projeto estão em [`requirements.txt`](requirements.txt). O `pandas` permanece listado como dependência disponível para recursos de dados, embora a lógica atual do aplicativo não o importe diretamente.
 
----
+## Configuração
 
-## ⚙️ Como Executar a Aplicação
+O aplicativo precisa de uma conexão PostgreSQL e de uma senha para a área do coordenador. Crie o arquivo `.streamlit/secrets.toml` com:
 
-Para rodar o sistema no seu ambiente local, siga estes passos:
-
-1. **Clone o repositório:**
-```bash
-git clone https://github.com/sousafeliper/site-acolitos.git
-cd site-acolitos
-
+```toml
+DATABASE_URL = "postgresql://usuario:senha@host:5432/banco"
+ADMIN_SENHA = "defina-uma-senha-forte"
 ```
 
+Não versione esse arquivo nem publique suas credenciais. As tabelas necessárias (`missas`, `inscricoes`, `acolitos`, `historico_pontos` e tabelas auxiliares) são criadas automaticamente na inicialização.
 
-2. **Instale as dependências necessárias:**
-```bash
-pip install -r requirements.txt
+## Como executar
 
-```
+1. Clone o repositório e entre na pasta do projeto:
 
+	```bash
+	git clone https://github.com/sousafeliper/site-acolitos.git
+	cd site-acolitos
+	```
 
-3. **Inicie o servidor Streamlit:**
-```bash
-streamlit run app.py
+2. Instale as dependências:
 
-```
+	```bash
+	pip install -r requirements.txt
+	```
 
+3. Configure o arquivo `.streamlit/secrets.toml` conforme a seção anterior.
 
-4. **Aceda ao sistema:**
-Abra o seu navegador em `http://localhost:8501`
+4. Inicie a aplicação:
 
----
+	```bash
+	streamlit run app.py
+	```
 
-## 📂 Estrutura do Projeto
+5. Abra `http://localhost:8501` no navegador.
 
-* `app.py`: Ficheiro principal que gere a navegação (Sidebar) e a lógica de cada módulo (Dashboard, Membros, Escalas).
-* `requirements.txt`: Lista de bibliotecas necessárias para o funcionamento do sistema.
-* `.devcontainer/`: Configurações para desenvolvimento isolado em contentores.
+## Estrutura do projeto
 
----
+- [`app.py`](app.py): aplicação Streamlit, interface, regras de negócio e acesso ao banco.
+- [`requirements.txt`](requirements.txt): dependências Python.
+- `.streamlit/secrets.toml`: credenciais locais da aplicação; não deve ser commitado.
 
-## 👤 Autor
+## Autor
 
-Desenvolvido por **Felipe Rodrigues de Sousa** como um contributo tecnológico para a comunidade paroquial.
+Desenvolvido por **Felipe Rodrigues de Sousa**.
 
-* **GitHub:** [@sousafeliper](https://www.google.com/search?q=https://github.com/sousafeliper)
-* **E-mail:** rodriguesdesousa.felipe01@gmail.com
+- GitHub: [@sousafeliper](https://github.com/sousafeliper)
+- E-mail: rodriguesdesousa.felipe01@gmail.com
+
