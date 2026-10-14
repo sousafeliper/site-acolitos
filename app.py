@@ -274,9 +274,8 @@ def inscrever_acolito(missa_id: int, nome_acolito: str, ignorar_vagas: bool = Fa
             cursor.execute("SELECT vagas_totais, vagas_estagiarios FROM missas WHERE id = %s", (missa_id,))
             limites = cursor.fetchone()
             if not limites: return False, "Missa não encontrada."
-            vagas_totais, vagas_estag = limites
-            vagas_vet = vagas_totais - vagas_estag
-
+            vagas_totais, vagas_estag_exclusivas = limites
+            
             # Conta quem já está inscrito (separando veteranos e estagiários)
             cursor.execute("""
                 SELECT a.is_estagiario, COUNT(*) 
@@ -288,23 +287,28 @@ def inscrever_acolito(missa_id: int, nome_acolito: str, ignorar_vagas: bool = Fa
             
             contagem = {True: 0, False: 0}
             for is_est, qtd in cursor.fetchall():
-                # Tratamento para caso o valor de is_estagiario venha como nulo do banco
-                key_is_est = bool(is_est)
-                contagem[key_is_est] += qtd
-            
+                # Tratamento para caso o valor venha nulo do banco
+                contagem[bool(is_est)] += qtd
+                
+            total_inscritos = contagem[True] + contagem[False]
             is_usuario_estagiario = obter_status_estagiario(nome_acolito)
 
-            # Regras de Negócio
+            # Regra 1 Global: A missa já está totalmente lotada?
+            if total_inscritos >= vagas_totais:
+                return False, "🔒 A escala para esta missa já está lotada."
+
+            # Regras de Negócio por Categoria
             if is_usuario_estagiario:
+                # O estagiário pode ocupar qualquer vaga livre, DESDE QUE haja um veterano na missa
                 if contagem[False] == 0:
-                    return False, "⚠️ Um veterano precisa se inscrever primeiro."
-                if contagem[True] >= vagas_estag:
-                    return False, "🔒 As vagas para estagiários estão lotadas."
+                    return False, "⚠️ Um veterano precisa se inscrever na escala primeiro."
             else:
-                if contagem[False] >= vagas_vet:
-                    return False, "🔒 As vagas para veteranos estão lotadas."
+                # O veterano pode ocupar qualquer vaga, MENOS as reservas exclusivas de estagiários
+                max_veteranos = vagas_totais - vagas_estag_exclusivas
+                if contagem[False] >= max_veteranos:
+                    return False, "🔒 Vagas limitadas: As vagas restantes são exclusivas para estágio."
         
-        # Se passou pelas regras, insere
+        # Se passou pelas regras, insere no banco
         cursor.execute("INSERT INTO inscricoes (missa_id, nome_acolito) VALUES (%s, %s)", (missa_id, nome_acolito))
         conn.commit()
         return True, "✅ Inscrição confirmada!"
@@ -881,8 +885,12 @@ def renderizar_card_missa(missa_id: int, nome_usuario: str):
         st.progress(progresso)
         
         v_est = missa.get('vagas_estagiarios', 0)
-        v_vet = missa['vagas_totais'] - v_est
-        st.caption(f"👥 **{missa['vagas_preenchidas']}/{missa['vagas_totais']} vagas preenchidas** ({v_vet} Veteranos | {v_est} Estagiários)")
+        if v_est > 0:
+            detalhe_vagas = f" (Sendo {v_est} exclusiva(s) p/ estágio)"
+        else:
+            detalhe_vagas = " (Abertas para veteranos ou estagiários)"
+            
+        st.caption(f"👥 **{missa['vagas_preenchidas']}/{missa['vagas_totais']} vagas preenchidas**{detalhe_vagas}")
         
         if missa['nomes_inscritos']:
             st.info(f"✨ **Escalados:** {', '.join(missa['nomes_inscritos'])}")
@@ -1332,3 +1340,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
