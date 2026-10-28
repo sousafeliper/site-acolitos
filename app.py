@@ -1147,12 +1147,32 @@ def fragment_historico():
         
         if mostrar:
             with st.expander(f"✅ {m['data']} - {m['descricao']}"):
+                st.write("👥 **Acólitos que pontuaram:**")
                 insc = listar_inscritos(m['id'])
-                st.write(f"Pontuaram: {', '.join(insc) if insc else 'Ninguém'}")
-                acolito_add = st.selectbox("Adicionar manual (Excede vagas):", [""] + listar_acolitos(), key=f"sa_{m['id']}")
+                
+                if insc:
+                    for u in insc:
+                        c1, c2 = st.columns([4, 1])
+                        c1.text(f"• {u}")
+                        # Botão para remover quem estava na escala mas faltou
+                        if c2.button("❌", key=f"rm_hist_{m['id']}_{u}", help="Remover ponto (Faltou)"):
+                            remover_inscricao_admin(m['id'], u)
+                            st.toast(f"Ponto removido de {u}.")
+                            st.rerun(scope="fragment")
+                else:
+                    st.caption("Ninguém registrado.")
+                
+                st.divider()
+                
+                # Adicionar quem serviu mas não estava na escala
+                acolito_add = st.selectbox("Adicionar manual (Excede vagas):", [""] + listar_acolitos(), key=f"sa_hist_{m['id']}")
                 if st.button("Adicionar Ponto", key=f"ba_{m['id']}"):
                     if acolito_add: 
                         sucesso, msg = inscrever_acolito(m['id'], acolito_add, ignorar_vagas=True)
+                        if sucesso:
+                            st.toast(f"Ponto adicionado para {acolito_add}!")
+                        else:
+                            st.error(msg)
                         st.rerun(scope="fragment")
 
 @st.fragment
