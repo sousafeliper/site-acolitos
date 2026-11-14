@@ -83,7 +83,6 @@ def criar_tabelas():
     cursor = None
     try:
         cursor = conn.cursor()
-        
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS missas (
                 id SERIAL PRIMARY KEY,
@@ -130,15 +129,18 @@ def criar_tabelas():
         """)
         conn.commit()
 
-        # Atualização para novas funcionalidades (Estagiários)
+        # Atualização para novas funcionalidades (Estagiários, Veteranos e Histórico)
         try:
             cursor.execute("ALTER TABLE acolitos ADD COLUMN IF NOT EXISTS is_estagiario BOOLEAN DEFAULT FALSE")
             cursor.execute("ALTER TABLE missas ADD COLUMN IF NOT EXISTS vagas_estagiarios INTEGER DEFAULT 0")
             cursor.execute("ALTER TABLE missas_padrao ADD COLUMN IF NOT EXISTS vagas_estagiarios INTEGER DEFAULT 0")
+            cursor.execute("ALTER TABLE missas ADD COLUMN IF NOT EXISTS vagas_veteranos INTEGER DEFAULT 0")
+            cursor.execute("ALTER TABLE missas_padrao ADD COLUMN IF NOT EXISTS vagas_veteranos INTEGER DEFAULT 0")
+            cursor.execute("ALTER TABLE historico_pontos ADD COLUMN IF NOT EXISTS hora VARCHAR(5)")
             conn.commit()
         except psycopg2.Error:
             if conn: conn.rollback()
-
+            
     except psycopg2.Error as e:
         st.error(f"Erro ao criar tabelas: {e}")
         if conn: conn.rollback()
@@ -155,16 +157,16 @@ def arquivar_missas_antigas():
         hoje = date.today()
         data_limite = (hoje - timedelta(days=5)).strftime("%Y-%m-%d")
         
-        cursor.execute("SELECT id, data FROM missas WHERE data < %s", (data_limite,))
+        cursor.execute("SELECT id, data, hora FROM missas WHERE data < %s", (data_limite,))
         missas_antigas = cursor.fetchall()
         
-        for m_id, m_data in missas_antigas:
+        for m_id, m_data, m_hora in missas_antigas:
             cursor.execute("""
-                INSERT INTO historico_pontos (nome_acolito, data_missa)
-                SELECT nome_acolito, %s 
+                INSERT INTO historico_pontos (nome_acolito, data_missa, hora)
+                SELECT nome_acolito, %s, %s 
                 FROM inscricoes 
                 WHERE missa_id = %s
-            """, (m_data, m_id))
+            """, (m_data, m_hora, m_id))
             cursor.execute("DELETE FROM missas WHERE id = %s", (m_id,))
             
         conn.commit()
@@ -180,7 +182,7 @@ def obter_missa_por_id(missa_id: int) -> Optional[Dict]:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            SELECT m.id, m.data, m.hora, m.descricao, m.vagas_totais, m.vagas_estagiarios,
+            SELECT m.id, m.data, m.hora, m.descricao, m.vagas_totais, m.vagas_estagiarios, m.vagas_veteranos,
                    COUNT(i.id) as vagas_preenchidas,
                    STRING_AGG(i.nome_acolito, ', ' ORDER BY i.nome_acolito) as nomes_inscritos
             FROM missas m
@@ -190,12 +192,12 @@ def obter_missa_por_id(missa_id: int) -> Optional[Dict]:
         """, (missa_id,))
         row = cursor.fetchone()
         if row:
-            nomes = row[7] if row[7] else None
+            nomes = row[8] if row[8] else None
             nomes_lista = [nome.strip() for nome in nomes.split(',')] if nomes else []
             return {
                 'id': row[0], 'data': row[1], 'hora': row[2], 'descricao': row[3],
-                'vagas_totais': row[4], 'vagas_estagiarios': row[5] or 0, 
-                'vagas_preenchidas': row[6] or 0, 'nomes_inscritos': nomes_lista
+                'vagas_totais': row[4], 'vagas_estagiarios': row[5] or 0, 'vagas_veteranos': row[6] or 0,
+                'vagas_preenchidas': row[7] or 0, 'nomes_inscritos': nomes_lista
             }
         return None
     except Exception: return None
@@ -210,9 +212,8 @@ def listar_missas_futuras() -> List[Dict]:
     try:
         cursor = conn.cursor()
         hoje = date.today().strftime("%Y-%m-%d")
-        
         cursor.execute("""
-            SELECT m.id, m.data, m.hora, m.descricao, m.vagas_totais, m.vagas_estagiarios,
+            SELECT m.id, m.data, m.hora, m.descricao, m.vagas_totais, m.vagas_estagiarios, m.vagas_veteranos,
                    COUNT(i.id) as vagas_preenchidas,
                    STRING_AGG(i.nome_acolito, ', ' ORDER BY i.nome_acolito) as nomes_inscritos
             FROM missas m
@@ -225,12 +226,12 @@ def listar_missas_futuras() -> List[Dict]:
         resultados = cursor.fetchall()
         missas = []
         for row in resultados:
-            nomes = row[7] if row[7] else None
+            nomes = row[8] if row[8] else None
             nomes_lista = [nome.strip() for nome in nomes.split(',')] if nomes else []
             missas.append({
                 'id': row[0], 'data': row[1], 'hora': row[2], 'descricao': row[3],
-                'vagas_totais': row[4], 'vagas_estagiarios': row[5] or 0,
-                'vagas_preenchidas': row[6] or 0, 'nomes_inscritos': nomes_lista
+                'vagas_totais': row[4], 'vagas_estagiarios': row[5] or 0, 'vagas_veteranos': row[6] or 0,
+                'vagas_preenchidas': row[7] or 0, 'nomes_inscritos': nomes_lista
             })
         return missas
     except psycopg2.Error: return []
@@ -271,11 +272,15 @@ def inscrever_acolito(missa_id: int, nome_acolito: str, ignorar_vagas: bool = Fa
         cursor = conn.cursor()
         if not ignorar_vagas:
             # Pega limites da missa
-            cursor.execute("SELECT vagas_totais, vagas_estagiarios FROM missas WHERE id = %s", (missa_id,))
+            cursor.execute("SELECT vagas_totais, vagas_estagiarios, vagas_veteranos FROM missas WHERE id = %s", (missa_id,))
             limites = cursor.fetchone()
             if not limites: return False, "Missa não encontrada."
-            vagas_totais, vagas_estag_exclusivas = limites
+            vagas_totais, vagas_estag_exclusivas, vagas_vet_exclusivas = limites
             
+            # Tratamento de nulos por segurança
+            vagas_estag_exclusivas = vagas_estag_exclusivas or 0
+            vagas_vet_exclusivas = vagas_vet_exclusivas or 0
+
             # Conta quem já está inscrito (separando veteranos e estagiários)
             cursor.execute("""
                 SELECT a.is_estagiario, COUNT(*) 
@@ -287,26 +292,29 @@ def inscrever_acolito(missa_id: int, nome_acolito: str, ignorar_vagas: bool = Fa
             
             contagem = {True: 0, False: 0}
             for is_est, qtd in cursor.fetchall():
-                # Tratamento para caso o valor venha nulo do banco
                 contagem[bool(is_est)] += qtd
                 
             total_inscritos = contagem[True] + contagem[False]
             is_usuario_estagiario = obter_status_estagiario(nome_acolito)
 
-            # Regra 1 Global: A missa já está totalmente lotada?
+            # Regra Global: A missa já está totalmente lotada?
             if total_inscritos >= vagas_totais:
                 return False, "🔒 A escala para esta missa já está lotada."
 
             # Regras de Negócio por Categoria
             if is_usuario_estagiario:
-                # O estagiário pode ocupar qualquer vaga livre, DESDE QUE haja um veterano na missa
+                # O estagiário precisa de um veterano primeiro
                 if contagem[False] == 0:
                     return False, "⚠️ Um veterano precisa se inscrever na escala primeiro."
+                # O estagiário não pode ocupar as vagas exclusivas de veteranos
+                max_estagiarios = vagas_totais - vagas_vet_exclusivas
+                if contagem[True] >= max_estagiarios:
+                    return False, "🔒 Vagas limitadas: As vagas restantes são exclusivas para veteranos."
             else:
-                # O veterano pode ocupar qualquer vaga, MENOS as reservas exclusivas de estagiários
+                # O veterano não pode ocupar as vagas exclusivas de estagiários
                 max_veteranos = vagas_totais - vagas_estag_exclusivas
                 if contagem[False] >= max_veteranos:
-                    return False, "🔒 Vagas limitadas: As vagas restantes são exclusivas para estágio."
+                    return False, "🔒 Vagas limitadas: As vagas restantes são exclusivas para estagiários."
         
         # Se passou pelas regras, insere no banco
         cursor.execute("INSERT INTO inscricoes (missa_id, nome_acolito) VALUES (%s, %s)", (missa_id, nome_acolito))
@@ -335,15 +343,15 @@ def desinscrever_acolito(missa_id: int, nome_acolito: str) -> bool:
         if cursor: cursor.close()
         release_db_connection(conn)
 
-def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int, vagas_estagiarios: int = 0) -> bool:
+def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int, vagas_estagiarios: int = 0, vagas_veteranos: int = 0) -> bool:
     conn = get_db_connection()
     if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO missas (data, hora, descricao, vagas_totais, vagas_estagiarios) VALUES (%s, %s, %s, %s, %s)", 
-            (data, hora, descricao, vagas_totais, vagas_estagiarios)
+            "INSERT INTO missas (data, hora, descricao, vagas_totais, vagas_estagiarios, vagas_veteranos) VALUES (%s, %s, %s, %s, %s, %s)", 
+            (data, hora, descricao, vagas_totais, vagas_estagiarios, vagas_veteranos)
         )
         conn.commit()
         return True
@@ -354,7 +362,7 @@ def cadastrar_missa(data: str, hora: str, descricao: str, vagas_totais: int, vag
         if cursor: cursor.close()
         release_db_connection(conn)
 
-def atualizar_missa(missa_id: int, data: str, hora: str, descricao: str, vagas_totais: int, vagas_estagiarios: int = 0) -> bool:
+def atualizar_missa(missa_id: int, data: str, hora: str, descricao: str, vagas_totais: int, vagas_estagiarios: int = 0, vagas_veteranos: int = 0) -> bool:
     conn = get_db_connection()
     if not conn: return False
     cursor = None
@@ -362,9 +370,9 @@ def atualizar_missa(missa_id: int, data: str, hora: str, descricao: str, vagas_t
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE missas 
-            SET data = %s, hora = %s, descricao = %s, vagas_totais = %s, vagas_estagiarios = %s
+            SET data = %s, hora = %s, descricao = %s, vagas_totais = %s, vagas_estagiarios = %s, vagas_veteranos = %s
             WHERE id = %s
-        """, (data, hora, descricao, vagas_totais, vagas_estagiarios, missa_id))
+        """, (data, hora, descricao, vagas_totais, vagas_estagiarios, vagas_veteranos, missa_id))
         conn.commit()
         return True
     except psycopg2.Error:
@@ -431,7 +439,7 @@ def listar_todas_missas() -> List[Dict]:
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT m.id, m.data, m.hora, m.descricao, m.vagas_totais, m.vagas_estagiarios, COUNT(i.id)
+            SELECT m.id, m.data, m.hora, m.descricao, m.vagas_totais, m.vagas_estagiarios, m.vagas_veteranos, COUNT(i.id)
             FROM missas m LEFT JOIN inscricoes i ON m.id = i.missa_id
             GROUP BY m.id ORDER BY m.data DESC, m.hora DESC
         """)
@@ -440,7 +448,8 @@ def listar_todas_missas() -> List[Dict]:
         for row in resultados:
             missas.append({
                 'id': row[0], 'data': row[1], 'hora': row[2], 'descricao': row[3],
-                'vagas_totais': row[4], 'vagas_estagiarios': row[5] or 0, 'vagas_preenchidas': row[6] or 0
+                'vagas_totais': row[4], 'vagas_estagiarios': row[5] or 0, 'vagas_veteranos': row[6] or 0,
+                'vagas_preenchidas': row[7] or 0
             })
         return missas
     except psycopg2.Error: return []
@@ -467,14 +476,14 @@ def excluir_missa(missa_id: int) -> bool:
     cursor = None
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT data FROM missas WHERE id = %s", (missa_id,))
+        cursor.execute("SELECT data, hora FROM missas WHERE id = %s", (missa_id,))
         res = cursor.fetchone()
         if res:
-            data_missa = res[0]
+            data_missa, hora_missa = res
             cursor.execute("""
-                INSERT INTO historico_pontos (nome_acolito, data_missa)
-                SELECT nome_acolito, %s FROM inscricoes WHERE missa_id = %s
-            """, (data_missa, missa_id))
+                INSERT INTO historico_pontos (nome_acolito, data_missa, hora)
+                SELECT nome_acolito, %s, %s FROM inscricoes WHERE missa_id = %s
+            """, (data_missa, hora_missa, missa_id))
             
         cursor.execute("DELETE FROM inscricoes WHERE missa_id = %s", (missa_id,))
         cursor.execute("DELETE FROM missas WHERE id = %s", (missa_id,))
@@ -504,7 +513,6 @@ def remover_inscricao_admin(missa_id: int, nome_acolito: str) -> bool:
         release_db_connection(conn)
 
 def listar_acolitos() -> List[str]:
-    """Retorna apenas a lista de nomes (para retrocompatibilidade em selects simples)"""
     conn = get_db_connection()
     if not conn: return []
     cursor = None
@@ -518,7 +526,6 @@ def listar_acolitos() -> List[str]:
         release_db_connection(conn)
 
 def listar_acolitos_com_status() -> List[Tuple[str, bool]]:
-    """Retorna a lista de acólitos com nome e status de estagiário"""
     conn = get_db_connection()
     if not conn: return []
     cursor = None
@@ -560,18 +567,14 @@ def remover_acolito(nome: str) -> bool:
         release_db_connection(conn)
 
 def alterar_nome_acolito(nome_antigo: str, nome_novo: str) -> bool:
-    """Atualiza o nome do acólito em todas as tabelas para preservar o histórico."""
     conn = get_db_connection()
     if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
-        
-        # Atualiza o nome nas 3 tabelas em que ele aparece
         cursor.execute("UPDATE acolitos SET nome = %s WHERE nome = %s", (nome_novo.strip(), nome_antigo))
         cursor.execute("UPDATE inscricoes SET nome_acolito = %s WHERE nome_acolito = %s", (nome_novo.strip(), nome_antigo))
         cursor.execute("UPDATE historico_pontos SET nome_acolito = %s WHERE nome_acolito = %s", (nome_novo.strip(), nome_antigo))
-        
         conn.commit()
         return True
     except psycopg2.Error as e:
@@ -601,7 +604,6 @@ def obter_ultimas_tres_missas(nome_acolito: str) -> List[Dict]:
     cursor = None
     try:
         cursor = conn.cursor()
-        # Junta o histórico ativo (inscricoes + missas) com o histórico arquivado
         cursor.execute("""
             SELECT data, descricao FROM (
                 SELECT m.data as data, m.descricao as descricao
@@ -628,16 +630,74 @@ def obter_ultimas_tres_missas(nome_acolito: str) -> List[Dict]:
         if cursor: cursor.close()
         release_db_connection(conn)
 
+def obter_frequencia_horarios(dias: int = 120) -> List[Tuple[int, str, List[Tuple[str, int]]]]:
+    conn = get_db_connection()
+    if not conn: return []
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        hoje = date.today()
+        data_limite = hoje - timedelta(days=dias)
+
+        cursor.execute("""
+            SELECT data_missa, hora, nome_acolito 
+            FROM historico_pontos 
+            WHERE data_missa >= %s AND data_missa <= %s AND hora IS NOT NULL
+        """, (data_limite, hoje))
+        historico = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT m.data, m.hora, i.nome_acolito 
+            FROM inscricoes i 
+            JOIN missas m ON i.missa_id = m.id 
+            WHERE m.data >= %s AND m.data <= %s
+        """, (data_limite.strftime("%Y-%m-%d"), hoje.strftime("%Y-%m-%d")))
+        ativas = cursor.fetchall()
+
+    except psycopg2.Error as e:
+        st.error(f"Erro ao buscar frequências: {e}")
+        return []
+    finally:
+        if cursor: cursor.close()
+        release_db_connection(conn)
+
+    dados = {}
+    
+    for data_m, hora_m, nome in (historico + ativas):
+        if isinstance(data_m, str):
+            try: data_m = datetime.strptime(data_m, "%Y-%m-%d").date()
+            except: continue
+        
+        if not hora_m: continue
+
+        dia_semana = data_m.weekday()
+        chave = (dia_semana, hora_m)
+
+        if chave not in dados:
+            dados[chave] = {'datas': set(), 'acolitos': {}}
+        
+        dados[chave]['datas'].add(data_m)
+        dados[chave]['acolitos'][nome] = dados[chave]['acolitos'].get(nome, 0) + 1
+
+    resultado = []
+    for chave, info in dados.items():
+        if len(info['datas']) >= 4:
+            ranking_horario = sorted(info['acolitos'].items(), key=lambda x: x[1], reverse=True)
+            resultado.append((chave[0], chave[1], ranking_horario))
+
+    resultado.sort(key=lambda x: (x[0], x[1]))
+    return resultado
+
 # ==================== FUNÇÕES DA AUTOMAÇÃO DE MISSAS ====================
 
-def cadastrar_missa_padrao(dia_semana: int, hora: str, descricao: str, vagas_totais: int, vagas_estagiarios: int = 0) -> bool:
+def cadastrar_missa_padrao(dia_semana: int, hora: str, descricao: str, vagas_totais: int, vagas_estagiarios: int = 0, vagas_veteranos: int = 0) -> bool:
     conn = get_db_connection()
     if not conn: return False
     cursor = None
     try:
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO missas_padrao (dia_semana, hora, descricao, vagas_totais, vagas_estagiarios) VALUES (%s, %s, %s, %s, %s)", 
-                       (dia_semana, hora, descricao, vagas_totais, vagas_estagiarios))
+        cursor.execute("INSERT INTO missas_padrao (dia_semana, hora, descricao, vagas_totais, vagas_estagiarios, vagas_veteranos) VALUES (%s, %s, %s, %s, %s, %s)", 
+                       (dia_semana, hora, descricao, vagas_totais, vagas_estagiarios, vagas_veteranos))
         conn.commit()
         return True
     except psycopg2.Error:
@@ -653,8 +713,8 @@ def listar_missas_padrao() -> List[Dict]:
     cursor = None
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, dia_semana, hora, descricao, vagas_totais, vagas_estagiarios FROM missas_padrao ORDER BY dia_semana, hora")
-        return [{'id': r[0], 'dia_semana': r[1], 'hora': r[2], 'descricao': r[3], 'vagas_totais': r[4], 'vagas_estagiarios': r[5] or 0} for r in cursor.fetchall()]
+        cursor.execute("SELECT id, dia_semana, hora, descricao, vagas_totais, vagas_estagiarios, vagas_veteranos FROM missas_padrao ORDER BY dia_semana, hora")
+        return [{'id': r[0], 'dia_semana': r[1], 'hora': r[2], 'descricao': r[3], 'vagas_totais': r[4], 'vagas_estagiarios': r[5] or 0, 'vagas_veteranos': r[6] or 0} for r in cursor.fetchall()]
     finally:
         if cursor: cursor.close()
         release_db_connection(conn)
@@ -673,7 +733,6 @@ def excluir_missa_padrao(padrao_id: int) -> bool:
         release_db_connection(conn)
 
 def gerar_missas_automaticamente():
-    """Gera as missas da próxima semana se já passou de sábado às 12:59"""
     conn = get_db_connection()
     if not conn: return
     cursor = None
@@ -681,34 +740,27 @@ def gerar_missas_automaticamente():
         cursor = conn.cursor()
         fuso = pytz.timezone('America/Sao_Paulo')
         agora = datetime.now(fuso)
-        
-        # Checa se passou de Sábado 12:59 (weekday: 5 = Sábado, 6 = Domingo)
         passou_limite = agora.weekday() == 6 or (agora.weekday() == 5 and (agora.hour > 12 or (agora.hour == 12 and agora.minute >= 59)))
         
         if passou_limite:
-            # Encontra a data da próxima SEGUNDA-FEIRA
             dias_para_segunda = (7 - agora.weekday()) % 7
             if dias_para_segunda == 0: dias_para_segunda = 7
             proxima_segunda = agora.date() + timedelta(days=dias_para_segunda)
             
-            # O ID da semana será a data da próxima segunda-feira (Ex: "2026-05-11")
             id_semana = proxima_segunda.strftime("%Y-%m-%d")
             
             cursor.execute("SELECT COUNT(*) FROM controle_geracao WHERE semana_id = %s", (id_semana,))
             if cursor.fetchone()[0] == 0:
-                # Ainda não foi gerado. Vamos gerar!
-                cursor.execute("SELECT dia_semana, hora, descricao, vagas_totais, vagas_estagiarios FROM missas_padrao")
+                cursor.execute("SELECT dia_semana, hora, descricao, vagas_totais, vagas_estagiarios, vagas_veteranos FROM missas_padrao")
                 padroes = cursor.fetchall()
                 
-                for dia, hora, desc, vagas, vagas_est in padroes:
-                    # Calcula o dia exato da missa (0=Segunda, 6=Domingo)
+                for dia, hora, desc, vagas, vagas_est, vagas_vet in padroes:
                     data_missa = proxima_segunda + timedelta(days=dia)
                     cursor.execute("""
-                        INSERT INTO missas (data, hora, descricao, vagas_totais, vagas_estagiarios) 
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (data_missa.strftime("%Y-%m-%d"), hora, desc, vagas, vagas_est))
+                        INSERT INTO missas (data, hora, descricao, vagas_totais, vagas_estagiarios, vagas_veteranos) 
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (data_missa.strftime("%Y-%m-%d"), hora, desc, vagas, vagas_est, vagas_vet))
                 
-                # Salva no banco que esta semana já foi gerada
                 cursor.execute("INSERT INTO controle_geracao (semana_id) VALUES (%s)", (id_semana,))
                 conn.commit()
     except psycopg2.Error:
@@ -717,23 +769,18 @@ def gerar_missas_automaticamente():
         if cursor: cursor.close()
         release_db_connection(conn)
 
-def obter_baixa_frequencia(
-    dias: int = 90, limite: int = 5
-) -> List[Tuple[str, int, Optional[date]]]:
+def obter_baixa_frequencia(dias: int = 90, limite: int = 5) -> List[Tuple[str, int, Optional[date]]]:
     conn = get_db_connection()
     if not conn: return []
     cursor = None
     try:
         cursor = conn.cursor()
-
-        # 1. Pegar todos os acólitos ativos
         cursor.execute("SELECT nome FROM acolitos")
         acolitos = {row[0]: {'quantidade': 0, 'ultima_missa': None} for row in cursor.fetchall()}
-
+        
         hoje = date.today()
         data_limite = hoje - timedelta(days=dias)
 
-        # 2. Buscar missas no histórico (arquivadas) nos últimos 90 dias
         cursor.execute("""
             SELECT nome_acolito, data_missa
             FROM historico_pontos
@@ -741,7 +788,6 @@ def obter_baixa_frequencia(
         """, (data_limite, hoje))
         historico = cursor.fetchall()
 
-        # 3. Buscar nas missas ativas (apenas as que já passaram ou até hoje)
         cursor.execute("""
             SELECT i.nome_acolito, m.data
             FROM inscricoes i
@@ -757,28 +803,19 @@ def obter_baixa_frequencia(
         if cursor: cursor.close()
         release_db_connection(conn)
 
-    # Contabilizar histórico
     for nome, data_missa in historico:
         if nome in acolitos:
             acolitos[nome]['quantidade'] += 1
-            if (
-                acolitos[nome]['ultima_missa'] is None
-                or data_missa > acolitos[nome]['ultima_missa']
-            ):
+            if (acolitos[nome]['ultima_missa'] is None or data_missa > acolitos[nome]['ultima_missa']):
                 acolitos[nome]['ultima_missa'] = data_missa
 
-    # Contabilizar ativas
     for nome, data_missa in ativas:
         if nome in acolitos:
             acolitos[nome]['quantidade'] += 1
             data_missa_obj = datetime.strptime(data_missa, "%Y-%m-%d").date()
-            if (
-                acolitos[nome]['ultima_missa'] is None
-                or data_missa_obj > acolitos[nome]['ultima_missa']
-            ):
+            if (acolitos[nome]['ultima_missa'] is None or data_missa_obj > acolitos[nome]['ultima_missa']):
                 acolitos[nome]['ultima_missa'] = data_missa_obj
 
-    # Filtrar (menos que 5) e ordenar (crescente: do que menos serviu para o que mais serviu)
     resultado = [
         (nome, dados['quantidade'], dados['ultima_missa'])
         for nome, dados in acolitos.items()
@@ -796,11 +833,14 @@ def modal_nova_missa():
         dt = st.date_input("Data", min_value=date.today())
         hr = st.time_input("Hora", value=time(19, 0))
         desc = st.text_input("Descrição (Ex: Missa Solene)")
+        
         vagas = st.number_input("Vagas Totais", 0, 50, 2)
-        vagas_estagiarios = st.number_input("Destas, quantas exclusivas para estágio?", 0, int(vagas), 0)
+        c_est, c_vet = st.columns(2)
+        vagas_estagiarios = c_est.number_input("Exclusivas p/ Estágio", 0, int(vagas), 0)
+        vagas_veteranos = c_vet.number_input("Exclusivas p/ Veteranos", 0, int(vagas), 0)
         
         if st.form_submit_button("Salvar Missa", type="primary", use_container_width=True):
-            if cadastrar_missa(dt.strftime("%Y-%m-%d"), hr.strftime("%H:%M"), desc, vagas, vagas_estagiarios):
+            if cadastrar_missa(dt.strftime("%Y-%m-%d"), hr.strftime("%H:%M"), desc, vagas, vagas_estagiarios, vagas_veteranos):
                 st.toast("✅ Missa criada com sucesso!")
                 st.rerun()
 
@@ -818,10 +858,12 @@ def modal_editar_missa(m):
         new_desc = st.text_input("Descrição", value=m['descricao'])
         
         new_vagas = st.number_input("Vagas Totais", 0, 50, value=m.get('vagas_totais', 2))
-        new_vagas_est = st.number_input("Destas, quantas para estágio?", 0, int(new_vagas), value=m.get('vagas_estagiarios', 0))
+        c_e, c_v = st.columns(2)
+        new_vagas_est = c_e.number_input("Exclusivas p/ Estágio", 0, int(new_vagas), value=m.get('vagas_estagiarios', 0))
+        new_vagas_vet = c_v.number_input("Exclusivas p/ Veteranos", 0, int(new_vagas), value=m.get('vagas_veteranos', 0))
         
         if st.form_submit_button("Salvar Alterações", type="primary", use_container_width=True):
-            if atualizar_missa(m['id'], new_dt.strftime("%Y-%m-%d"), new_hr.strftime("%H:%M"), new_desc, new_vagas, new_vagas_est):
+            if atualizar_missa(m['id'], new_dt.strftime("%Y-%m-%d"), new_hr.strftime("%H:%M"), new_desc, new_vagas, new_vagas_est, new_vagas_vet):
                 st.toast("✅ Missa atualizada!")
                 st.rerun()
 
@@ -853,7 +895,6 @@ def modal_ultimas_missas(nome_acolito: str):
     else:
         for m in ultimas:
             try:
-                # Tenta formatar a data para o padrão BR
                 d_obj = datetime.strptime(m['data'], "%Y-%m-%d")
                 d_fmt = d_obj.strftime("%d/%m/%Y")
             except:
@@ -865,7 +906,6 @@ def modal_ultimas_missas(nome_acolito: str):
 
 @st.fragment
 def renderizar_card_missa(missa_id: int, nome_usuario: str):
-    """Componente otimizado para Mobile (Container em vez de colunas)"""
     missa = obter_missa_por_id(missa_id)
     if not missa:
         st.error("Missa não encontrada.")
@@ -885,17 +925,23 @@ def renderizar_card_missa(missa_id: int, nome_usuario: str):
         st.progress(progresso)
         
         v_est = missa.get('vagas_estagiarios', 0)
-        if v_est > 0:
-            detalhe_vagas = f" (Sendo {v_est} exclusiva(s) p/ estágio)"
+        v_vet = missa.get('vagas_veteranos', 0)
+        
+        detalhes = []
+        if v_est > 0: detalhes.append(f"{v_est} p/ estagiários")
+        if v_vet > 0: detalhes.append(f"{v_vet} p/ veteranos")
+        
+        if detalhes:
+            detalhe_vagas = f" (Reservas: {' | '.join(detalhes)})"
         else:
-            detalhe_vagas = " (Abertas para veteranos ou estagiários)"
+            detalhe_vagas = " (Abertas para todos)"
             
         st.caption(f"👥 **{missa['vagas_preenchidas']}/{missa['vagas_totais']} vagas preenchidas**{detalhe_vagas}")
         
         if missa['nomes_inscritos']:
             st.info(f"✨ **Escalados:** {', '.join(missa['nomes_inscritos'])}")
         
-        st.write("") # Espaçador natural
+        st.write("")
         esta_inscrito = verificar_inscricao(missa['id'], nome_usuario)
         
         if esta_inscrito:
@@ -1025,11 +1071,14 @@ def fragment_missas_padrao():
         dia_sel = c1.selectbox("Dia da Semana", options=list(dias_dict.keys()), format_func=lambda x: dias_dict[x])
         hr_sel = c2.time_input("Hora", value=time(19, 0))
         desc_sel = st.text_input("Descrição (Ex: Missa Paroquial)")
+        
         vagas_sel = st.number_input("Vagas Totais", 1, 50, 2)
-        vagas_est_sel = st.number_input("Destas, vagas exclusivas para estágio?", 0, int(vagas_sel), 0)
+        c_est, c_vet = st.columns(2)
+        vagas_est_sel = c_est.number_input("Exclusivas p/ Estágio", 0, int(vagas_sel), 0)
+        vagas_vet_sel = c_vet.number_input("Exclusivas p/ Veteranos", 0, int(vagas_sel), 0)
         
         if st.form_submit_button("➕ Salvar na Rotina", type="primary"):
-            cadastrar_missa_padrao(dia_sel, hr_sel.strftime("%H:%M"), desc_sel, vagas_sel, vagas_est_sel)
+            cadastrar_missa_padrao(dia_sel, hr_sel.strftime("%H:%M"), desc_sel, vagas_sel, vagas_est_sel, vagas_vet_sel)
             st.rerun(scope="fragment")
 
     st.divider()
@@ -1039,8 +1088,8 @@ def fragment_missas_padrao():
         st.caption("Nenhuma missa padrão cadastrada ainda.")
     else:
         for p in padroes:
-            c_texto, c_btn = st.columns([4, 1])
-            c_texto.write(f"**{dias_dict[p['dia_semana']]}** às **{p['hora']}** - {p['descricao']} ({p['vagas_totais']} vagas | {p['vagas_estagiarios']} estagiários)")
+            c_texto, c_btn = st.columns([5, 1])
+            c_texto.write(f"**{dias_dict[p['dia_semana']]}** às **{p['hora']}** - {p['descricao']} ({p['vagas_totais']} vagas totais | Est: {p['vagas_estagiarios']} | Vet: {p.get('vagas_veteranos',0)})")
             if c_btn.button("🗑️", key=f"del_padrao_{p['id']}", use_container_width=True):
                 excluir_missa_padrao(p['id'])
                 st.rerun(scope="fragment")
@@ -1070,7 +1119,6 @@ def fragment_agenda():
 
         with st.expander(f"{m['data']} - {m['descricao']} ({m['vagas_preenchidas']}/{m['vagas_totais']})"):
             
-            # Botões de Ação na Missa
             col_edit, col_del = st.columns(2)
             with col_edit:
                 if st.button("✏️ Editar Missa", key=f"btn_edit_{m['id']}", use_container_width=True):
@@ -1079,7 +1127,6 @@ def fragment_agenda():
                 if st.button("🗑️ Excluir", key=f"btn_del_req_{m['id']}", use_container_width=True):
                     st.session_state[f"confirm_del_{m['id']}"] = True
             
-            # Dupla Confirmação de Exclusão
             if st.session_state.get(f"confirm_del_{m['id']}", False):
                 st.warning("⚠️ **Tem certeza?** Esta ação apagará as inscrições da missa.")
                 c1, c2 = st.columns(2)
@@ -1104,12 +1151,10 @@ def fragment_agenda():
             else: 
                 st.caption("Nenhum acólito inscrito ainda.")
                 
-            # NOVA FUNCIONALIDADE: Adicionar múltiplos acólitos
             st.divider()
             st.write("➕ **Adicionar Acólitos à Escala**")
             
             todos_acolitos = listar_acolitos()
-            # Filtra os acólitos que já estão inscritos para evitar duplicidade
             disponiveis = [a for a in todos_acolitos if a not in inscritos]
             
             if disponiveis:
@@ -1123,7 +1168,6 @@ def fragment_agenda():
                 if st.button("Adicionar Selecionados", key=f"btn_multi_add_{m['id']}", type="secondary", use_container_width=True):
                     if selecionados:
                         for ac in selecionados:
-                            # Ignoramos o limite de vagas porque é o coordenador que está adicionando
                             sucesso, msg = inscrever_acolito(m['id'], ac, ignorar_vagas=True) 
                         st.toast(f"✅ {len(selecionados)} acólito(s) adicionado(s) com sucesso!")
                         st.rerun(scope="fragment")
@@ -1154,7 +1198,6 @@ def fragment_historico():
                     for u in insc:
                         c1, c2 = st.columns([4, 1])
                         c1.text(f"• {u}")
-                        # Botão para remover quem estava na escala mas faltou
                         if c2.button("❌", key=f"rm_hist_{m['id']}_{u}", help="Remover ponto (Faltou)"):
                             remover_inscricao_admin(m['id'], u)
                             st.toast(f"Ponto removido de {u}.")
@@ -1164,7 +1207,6 @@ def fragment_historico():
                 
                 st.divider()
                 
-                # Adicionar quem serviu mas não estava na escala
                 acolito_add = st.selectbox("Adicionar manual (Excede vagas):", [""] + listar_acolitos(), key=f"sa_hist_{m['id']}")
                 if st.button("Adicionar Ponto", key=f"ba_{m['id']}"):
                     if acolito_add: 
@@ -1211,8 +1253,8 @@ def fragment_equipe():
                                 st.rerun(scope="fragment")
                     else:
                         c1.write(f"👤 **{ac}**")
-                        c_btn.write("") # Placeholder
-                    
+                        c_btn.write("") 
+
                     if c_hist.button("📜", key=f"hist_ac_{ac}", help="Ver últimas 3 missas", use_container_width=True):
                         modal_ultimas_missas(ac)
                     if c_edit.button("✏️", key=f"edit_ac_{ac}", use_container_width=True):
@@ -1260,7 +1302,7 @@ def fragment_equipe():
                     c_ultima.caption(f"Última missa: **{ultima_missa_fmt}**")
 
 def renderizar_rankings():
-    st.subheader("🏆 Painel de Pontuação")
+    st.subheader("🏆 Painel de Pontuação e Frequência")
     st.caption("Selecione o período de referência para visualizar os rankings.")
     c_mes, c_ano, c_vazio = st.columns([1, 1, 2])
 
@@ -1275,12 +1317,28 @@ def renderizar_rankings():
 
     data_referencia = date(sel_ano, sel_mes_num, 1)
 
-    rt1, rt2, rt3 = st.tabs(["📅 Mensal", "📊 Trimestral", "📆 Anual"])
+    rt1, rt2, rt3, rt4 = st.tabs(["📅 Mensal", "📊 Trimestral", "📆 Anual", "⏱️ Por Horário (120 dias)"])
+    
     with rt1: render_ranking_table(obter_ranking_filtrado('mensal', data_referencia), f"Ranking: {meses[sel_mes_num]}/{sel_ano}")
     with rt2:
         trimestre = (sel_mes_num - 1) // 3 + 1
         render_ranking_table(obter_ranking_filtrado('trimestral', data_referencia), f"Ranking: {trimestre}º Trimestre/{sel_ano}")
     with rt3: render_ranking_table(obter_ranking_filtrado('anual', data_referencia), f"Ranking: Ano {sel_ano}")
+    
+    with rt4:
+        st.markdown("### Top Acólitos por Horário de Missa")
+        st.caption("Exibe a frequência dos acólitos nos horários regulares (ocorridos 4+ vezes) durante os últimos 120 dias.")
+        
+        frequencias = obter_frequencia_horarios(dias=120)
+        
+        if not frequencias:
+            st.info("🗓️ Não há dados suficientes com horários salvos para gerar este relatório ainda.")
+        else:
+            dias_semana = {0: "Segunda", 1: "Terça", 2: "Quarta", 3: "Quinta", 4: "Sexta", 5: "Sábado", 6: "Domingo"}
+            
+            for dia, hora, ranking in frequencias:
+                textos_acolitos = [f"{nome} ({qtd} vezes)" for nome, qtd in ranking]
+                st.write(f"🗓️ **{dias_semana[dia]} às {hora}:** {', '.join(textos_acolitos)}")
 
 def tela_admin():
     st.title("⚙️ Painel do Coordenador")
@@ -1288,7 +1346,6 @@ def tela_admin():
     if 'subtela_admin' not in st.session_state:
         st.session_state['subtela_admin'] = 'menu'
 
-    # --- CABEÇALHO DE NAVEGAÇÃO ---
     col_sair, col_voltar = st.columns([1, 1])
     with col_sair:
         if st.button("🚪 Sair do Sistema", use_container_width=True):
@@ -1304,7 +1361,6 @@ def tela_admin():
 
     st.divider()
 
-    # --- ROTEAMENTO DAS PÁGINAS ---
     tela_atual = st.session_state['subtela_admin']
 
     if tela_atual == 'menu':
@@ -1335,12 +1391,16 @@ def tela_admin():
 
     elif tela_atual == 'agenda':
         fragment_agenda()
+
     elif tela_atual == 'padrao':
         fragment_missas_padrao()
+
     elif tela_atual == 'equipe':
         fragment_equipe()
+
     elif tela_atual == 'rankings':
         renderizar_rankings()
+
     elif tela_atual == 'historico':
         fragment_historico()
 
@@ -1349,7 +1409,7 @@ def tela_admin():
 def main():
     criar_tabelas()
     arquivar_missas_antigas()
-    gerar_missas_automaticamente()
+    gerar_missas_automaticamente() 
     
     if 'tela' not in st.session_state:
         st.session_state['tela'] = 'login'
@@ -1360,4 +1420,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
